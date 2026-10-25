@@ -89,7 +89,9 @@ cleanup() {
   local m
   for ((i=${#mounted[@]}-1; i>=0; i--)); do
     m="${mounted[i]}"
-    mountpoint -q "$m" && umount "$m" 2>/dev/null || true
+    if mountpoint -q "$m"; then
+      umount "$m" 2>/dev/null || true
+    fi
   done
 }
 trap cleanup EXIT
@@ -203,6 +205,8 @@ search --no-floppy --set=root --label $VOLID
 configfile /boot/grub/grub.cfg
 EOF
 
+# shellcheck disable=SC2016  # quotes simples voulues : ce script s'evalue
+# dans le chroot, pas sur l'hote. Une expansion ici casserait grub-mkstandalone.
 in_chroot /bin/bash -c '
   set -Eeuo pipefail
   grub-mkstandalone -O x86_64-efi -o /tmp/BOOTX64.EFI \
