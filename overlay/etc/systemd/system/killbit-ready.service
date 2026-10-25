@@ -1,0 +1,16 @@
+# Émet un marqueur sur la console une fois le système démarré. C'est ce que le
+# test d'amorçage de la CI attend : sans lui, on ne peut pas distinguer une ISO
+# qui démarre d'une ISO qui panique, et ce défaut est déjà passé inaperçu une fois.
+[Unit]
+Description=Marqueur de disponibilite de l'image killbit
+After=multi-user.target systemd-networkd.service
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo "KILLBIT-IMAGE-READY base=$(. /etc/os-release; echo $VERSION_ID) killbit=$(command -v killbit)"'
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

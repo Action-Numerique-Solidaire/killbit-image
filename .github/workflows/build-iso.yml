@@ -15,6 +15,10 @@ on:
         description: "Empreinte SHA-256 attendue (vide = pas de vérification)"
         required: false
         default: ""
+      with_browser:
+        description: "Embarquer firefox-esr (1) ou alléger l'ISO (0)"
+        required: false
+        default: "1"
 
 concurrency:
   group: build-iso-${{ github.ref }}
@@ -28,70 +32,102 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Analyse statique des scripts
-        run: |
+      - run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck build-iso.sh overlay/usr/local/sbin/killbit-launcher.sh
+          shellcheck build-iso.sh overlay/usr/local/sbin/killbit-session.sh tests/boot-test.sh
 
   build:
-    # ubuntu-24.04 impératif : killbit exige GLIBC_2.38, l'image est basée sur noble.
     runs-on: ubuntu-24.04
     needs: shellcheck
     permissions:
-      contents: write   # nécessaire uniquement pour publier la release sur tag
+      contents: write   # publication de la release
     steps:
       - uses: actions/checkout@v4
 
       - name: Libérer de l'espace disque
-        # Une ISO live + son chroot + le squashfs dépassent facilement ce que
+        # Une ISO live, son chroot et le squashfs dépassent facilement ce que
         # laisse l'image préinstallée du runner.
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+                      /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-}" || true
           df -h /
 
       - name: Installer les dépendances de construction
-        # grub-efi-amd64-bin, mtools et dosfstools ne sont PAS installés ici :
-        # le chargeur UEFI est construit dans le chroot, l'hôte n'a besoin que
-        # de xorriso.
+        # debian-archive-keyring est indispensable : le runner est sous Ubuntu
+        # et debootstrap refuserait l'archive Debian sans son trousseau.
+        # grub-efi, mtools et dosfstools ne sont PAS installés ici, le chargeur
+        # UEFI étant construit dans le chroot.
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap squashfs-tools xorriso isolinux syslinux-common
+          sudo apt-get install -y debootstrap debian-archive-keyring \
+                                  squashfs-tools xorriso isolinux syslinux-common \
+                                  qemu-system-x86 ovmf
 
       - name: Construire l'ISO
         env:
           KILLBIT_ISO_WORK: ${{ runner.temp }}/killbit-build
-          KILLBIT_URL: ${{ github.event.inputs.killbit_url || 'https://github.com/r3dge/ANS-public/raw/refs/heads/main/bin/killbit' }}
-          KILLBIT_SHA256: ${{ github.event.inputs.killbit_sha256 || '' }}
+          KILLBIT_URL: ${{ inputs.killbit_url || 'https://github.com/r3dge/ANS-public/raw/refs/heads/main/bin/killbit' }}
+          KILLBIT_SHA256: ${{ inputs.killbit_sha256 || '' }}
+          KILLBIT_WITH_BROWSER: ${{ inputs.with_browser || '1' }}
         run: |
           sudo -E ./build-iso.sh "$GITHUB_WORKSPACE/killbit-live.iso"
           sudo chown "$USER" "$GITHUB_WORKSPACE/killbit-live.iso"*
 
       - name: Vérifier que l'ISO est amorçable en BIOS ET en UEFI
-        # Le chantier PXE a livré une ISO BIOS seul sans que personne ne le voie :
-        # cette assertion rend l'erreur impossible à rater.
+        # Une ISO BIOS seul ne démarre pas sur du matériel post-2012 à CSM
+        # désactivé, et le défaut est invisible à l'œil nu.
         run: |
           report=$(xorriso -indev killbit-live.iso -report_el_torito plain 2>/dev/null)
           echo "$report"
-          echo "$report" | grep -q 'El Torito boot img :   1  BIOS' \
+          echo "$report" | grep -q 'BIOS' \
             || { echo "::error::Entrée El Torito BIOS absente"; exit 1; }
           echo "$report" | grep -q 'UEFI' \
-            || { echo "::error::Entrée El Torito UEFI absente — l'ISO ne démarrerait pas sur du matériel récent"; exit 1; }
+            || { echo "::error::Entrée El Torito UEFI absente"; exit 1; }
+
+      - name: Vérifier le contenu de l'image
+        # Garde-fou sur la promesse du dépôt : killbit et ses bibliothèques
+        # doivent réellement être dans le squashfs.
+        run: |
+          sudo apt-get install -y squashfs-tools >/dev/null
+          sudo mkdir -p /mnt/iso /mnt/sq
+          sudo mount -o loop,ro killbit-live.iso /mnt/iso
+          sudo mount -o loop,ro /mnt/iso/live/filesystem.squashfs /mnt/sq
+          fail=0
+          for f in usr/local/bin/killbit usr/sbin/hdparm usr/sbin/nvme \
+                   usr/sbin/smartctl usr/bin/xterm usr/bin/openbox \
+                   etc/killbit-image-release; do
+            if sudo test -e "/mnt/sq/$f"; then echo "  OK      $f"
+            else echo "::error::absent de l'image : $f"; fail=1; fi
+          done
+          echo "--- bibliotheques attendues ---"
+          for l in libcurl.so.4 libsodium.so.23 libstdc++.so.6; do
+            if sudo find /mnt/sq/usr/lib -name "$l*" -print -quit | grep -q .; then
+              echo "  OK      $l"
+            else echo "::error::bibliotheque absente : $l"; fail=1; fi
+          done
+          sudo cat /mnt/sq/etc/killbit-image-release
+          sudo umount /mnt/sq /mnt/iso
+          exit $fail
+
+      - name: Test d'amorçage réel (BIOS)
+        # Une ISO peut contenir tous les bons fichiers et paniquer au démarrage :
+        # c'est arrivé, faute de systemd-sysv donc de /sbin/init. Seul un
+        # démarrage réel le prouve. Pas de KVM sur un runner, donc émulation.
+        timeout-minutes: 20
+        run: ./tests/boot-test.sh killbit-live.iso bios 900
+
+      - name: Test d'amorçage réel (UEFI)
+        timeout-minutes: 20
+        run: ./tests/boot-test.sh killbit-live.iso uefi 900
 
       - name: Récapitulatif
         run: |
           {
             echo "### ISO killbit"
-            echo
             echo '```'
             ls -lh killbit-live.iso
             cat killbit-live.iso.sha256
-            echo '```'
-            echo
-            echo "Écriture sur clé USB :"
-            echo '```bash'
-            echo 'sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -104,22 +140,53 @@ jobs:
           retention-days: 14
           compression-level: 0   # une ISO xz est déjà compressée
 
-      - name: Publier la release
+      # --- Publication en release ------------------------------------------
+      - name: Publier la release glissante (push sur main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Construction automatique depuis \`main\` (${GITHUB_SHA:0:7})."
+            echo
+            echo "ISO live hybride BIOS + UEFI, base Debian 13, embarquant killbit."
+            echo
+            echo '```bash'
+            echo 'sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync'
+            echo '```'
+            echo
+            echo "Secure Boot doit etre desactive : le chargeur n'est pas signe."
+            echo
+            echo '```'
+            cat killbit-live.iso.sha256
+            echo '```'
+          } > notes.md
+          # Release glissante : on remplace l'ISO precedente plutot que
+          # d'accumuler une release par commit.
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest killbit-live.iso killbit-live.iso.sha256 \
+            --title "Derniere construction (main)" \
+            --notes-file notes.md \
+            --prerelease
+
+      - name: Publier la release versionnée (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > notes.md <<'NOTES'
-          ISO live hybride BIOS + UEFI embarquant killbit.
-
-          Ecriture sur cle USB :
-
-          ```bash
-          sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync
-          ```
-
-          Secure Boot doit etre desactive dans le firmware : le chargeur n'est pas signe.
-          NOTES
+          {
+            echo "ISO live hybride BIOS + UEFI, base Debian 13, embarquant killbit."
+            echo
+            echo '```bash'
+            echo 'sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync'
+            echo '```'
+            echo
+            echo "Secure Boot doit etre desactive : le chargeur n'est pas signe."
+            echo
+            echo '```'
+            cat killbit-live.iso.sha256
+            echo '```'
+          } > notes.md
           gh release create "$GITHUB_REF_NAME" \
             killbit-live.iso killbit-live.iso.sha256 \
             --title "killbit-image $GITHUB_REF_NAME" \

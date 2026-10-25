@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Construit une ISO live hybride BIOS (isolinux) + UEFI (GRUB) embarquant
-# l'exécutable killbit et tous ses prérequis d'exécution.
+# Construit une ISO live hybride BIOS + UEFI embarquant killbit, ses prérequis
+# d'exécution et un environnement graphique minimal.
 #
-# killbit est un binaire C++ construit sur Ubuntu 24.04 : il exige GLIBC_2.38,
-# donc la base de l'image DOIT être noble ou plus récent. Ne pas rétrograder.
+# Base : Debian 13 (trixie). Deux raisons, toutes deux vérifiées :
+#   - killbit exige GLIBC_2.38 ; trixie fournit 2.41. Une base Ubuntu 22.04
+#     (2.35) ne conviendrait pas.
+#   - sur Ubuntu 24.04, firefox et chromium ne sont que des paquets de
+#     transition vers des snaps, inutilisables dans un debootstrap. Debian
+#     fournit de vrais .deb.
 #
 # Usage : sudo ./build-iso.sh [chemin-de-sortie.iso]
 set -Eeuo pipefail
@@ -14,38 +18,50 @@ OVERLAY_SRC="$SCRIPT_DIR/overlay"
 WORK_ROOT="${KILLBIT_ISO_WORK:-/srv/killbit-iso-build}"
 CHROOT="$WORK_ROOT/chroot"
 ISO_STAGE="$WORK_ROOT/iso"
-DISTRO="${KILLBIT_DISTRO:-noble}"
-MIRROR="${KILLBIT_MIRROR:-http://archive.ubuntu.com/ubuntu}"
+DISTRO="${KILLBIT_DISTRO:-trixie}"
+MIRROR="${KILLBIT_MIRROR:-http://deb.debian.org/debian}"
 OUTPUT_ISO="${1:-$WORK_ROOT/killbit-live.iso}"
 VOLID="KILLBIT"
 
 KILLBIT_URL="${KILLBIT_URL:-https://github.com/r3dge/ANS-public/raw/refs/heads/main/bin/killbit}"
-# Empreinte attendue, optionnelle. Si elle est fournie et ne correspond pas, on
-# s'arrête : l'URL pointe sur refs/heads/main, donc le binaire peut changer sans
-# préavis et on ne grave pas une image dont on ignore le contenu.
+# Empreinte attendue, optionnelle. L'URL pointe sur refs/heads/main : le binaire
+# peut changer sans préavis, et on ne grave pas une image dont on ignore le
+# contenu. Renseigner cette variable fige la version.
 KILLBIT_SHA256="${KILLBIT_SHA256:-}"
+# Navigateur embarqué pour la future page d'état locale de killbit.
+# 0 pour alléger l'ISO d'environ 266 Mo installés.
+KILLBIT_WITH_BROWSER="${KILLBIT_WITH_BROWSER:-1}"
 
-# Prérequis d'exécution de killbit, déduits du binaire lui-même :
-#   readelf -d  -> libcurl.so.4, libsodium.so.23, libstdc++.so.6, libgcc_s.so.1
-#   strings     -> hdparm, nvme-cli, smartctl, blkdiscard, lsblk, udevadm
-#   libcurl + endpoints HTTPS -> réseau et autorités de certification requis
+# Prérequis déduits du binaire, pas devinés :
+#   readelf -d : libcurl.so.4, libsodium.so.23, libstdc++.so.6, libgcc_s.so.1
+#   strings    : hdparm, nvme, smartctl, blkdiscard, lsblk, udevadm
+#   libcurl vers des endpoints HTTPS : réseau + autorités de certification
 PACKAGES=(
-  # bibliothèques dynamiques exigées par le binaire
+  # bibliothèques dynamiques exigées par killbit
   libcurl4t64 libsodium23 libstdc++6 libgcc-s1
-  # outils que killbit appelle pour l'effacement et le diagnostic
+  # outils appelés par killbit
   hdparm nvme-cli smartmontools util-linux udev
   # identification matérielle
   dmidecode pciutils usbutils lshw
-  # réseau : killbit remonte ses rapports en HTTPS
-  ca-certificates curl iproute2 netplan.io
+  # réseau
+  ca-certificates curl iproute2 systemd-resolved
+  # système live
+  # systemd-sysv est INDISPENSABLE : il fournit /sbin/init. Avec --variant=minbase
+  # et --no-install-recommends il n'est pas tiré, et le noyau panique au
+  # démarrage sur « Attempted to kill init ». Vérifié en VM.
+  linux-image-amd64 systemd-sysv live-boot live-config live-config-systemd
+  # micrologiciels ciblés : réseau et divers. On évite volontairement les gros
+  # blobs GPU, qui pèsent des centaines de Mo pour un outil sans interface 3D.
+  firmware-linux-free firmware-misc-nonfree firmware-realtek firmware-iwlwifi
+  # environnement graphique minimal (openbox + xterm, pas de bureau complet)
+  xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-all
+  xinit xauth x11-xserver-utils openbox xterm fonts-dejavu-core dbus-x11
   # confort opérateur
   less nano kbd console-setup
-  # système live
-  linux-image-generic
-  live-boot live-config live-config-systemd
-  isolinux syslinux-common
-  grub-efi-amd64-bin grub-common mtools dosfstools
+  # amorçage
+  isolinux syslinux-common grub-efi-amd64-bin grub-common mtools dosfstools
 )
+[[ "$KILLBIT_WITH_BROWSER" == "1" ]] && PACKAGES+=(firefox-esr)
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { printf 'ERREUR : %b\n' "$*" >&2; exit 1; }
@@ -56,6 +72,17 @@ die() { printf 'ERREUR : %b\n' "$*" >&2; exit 1; }
 for cmd in debootstrap mksquashfs xorriso curl; do
   command -v "$cmd" >/dev/null || die "Commande requise absente : $cmd"
 done
+
+# debootstrap vérifie la signature de l'archive. Sur un hôte Ubuntu, seul le
+# trousseau Ubuntu est présent et l'amorçage d'une base Debian échoue sur une
+# erreur GPG peu explicite. On échoue tôt, avec la commande qui corrige.
+DEBIAN_KEYRING="/usr/share/keyrings/debian-archive-keyring.gpg"
+DEBOOTSTRAP_OPTS=(--arch=amd64 --variant=minbase)
+if [[ -f "$DEBIAN_KEYRING" ]]; then
+  DEBOOTSTRAP_OPTS+=(--keyring "$DEBIAN_KEYRING")
+elif ! [[ -f /etc/debian_version ]] || ! grep -qi debian /etc/os-release; then
+  die "Trousseau Debian absent : $DEBIAN_KEYRING\n  Corriger avec : sudo apt-get install -y debian-archive-keyring"
+fi
 
 mounted=()
 cleanup() {
@@ -73,7 +100,7 @@ bind_mount() {
   mounted+=("$target")
 }
 
-# --- 1. Récupérer et vérifier killbit AVANT de construire quoi que ce soit ----
+# --- 1. killbit d'abord : inutile de construire si le binaire est inattendu ---
 log "Téléchargement de killbit depuis $KILLBIT_URL"
 install -d -m 0755 "$WORK_ROOT"
 curl -fsSL --retry 3 --retry-delay 2 -o "$WORK_ROOT/killbit" "$KILLBIT_URL" \
@@ -84,7 +111,7 @@ if [[ -n "$KILLBIT_SHA256" ]]; then
     || die "Empreinte killbit inattendue.\n  attendue : $KILLBIT_SHA256\n  obtenue  : $actual_sha"
   log "Empreinte killbit vérifiée : $actual_sha"
 else
-  log "Empreinte killbit (non vérifiée, aucune attendue fournie) : $actual_sha"
+  log "Empreinte killbit (aucune attendue fournie) : $actual_sha"
 fi
 file "$WORK_ROOT/killbit" | grep -q 'ELF 64-bit' || die "killbit n'est pas un ELF 64 bits"
 
@@ -93,7 +120,7 @@ if [[ -d "$CHROOT" ]]; then
   log "Chroot existant réutilisé : $CHROOT (supprimer $WORK_ROOT pour repartir de zéro)"
 else
   log "Debootstrap de $DISTRO (plusieurs minutes)"
-  debootstrap --arch=amd64 "$DISTRO" "$CHROOT" "$MIRROR"
+  debootstrap "${DEBOOTSTRAP_OPTS[@]}" "$DISTRO" "$CHROOT" "$MIRROR"
 fi
 
 bind_mount "$CHROOT/dev" --bind /dev
@@ -102,10 +129,13 @@ bind_mount "$CHROOT/proc" -t proc proc
 bind_mount "$CHROOT/sys" -t sysfs sysfs
 install -m 0644 /etc/resolv.conf "$CHROOT/etc/resolv.conf"
 
+# non-free-firmware est une composante distincte depuis Debian 12 : sans elle,
+# les micrologiciels réseau sont introuvables et beaucoup de portables anciens
+# démarrent sans carte Wi-Fi ni Ethernet fonctionnelle.
 cat > "$CHROOT/etc/apt/sources.list" <<EOF
-deb $MIRROR $DISTRO main restricted universe multiverse
-deb $MIRROR $DISTRO-updates main restricted universe multiverse
-deb $MIRROR $DISTRO-security main restricted universe multiverse
+deb $MIRROR $DISTRO main non-free-firmware
+deb $MIRROR $DISTRO-updates main non-free-firmware
+deb http://security.debian.org/debian-security $DISTRO-security main non-free-firmware
 EOF
 
 cat > "$CHROOT/usr/sbin/policy-rc.d" <<'EOF'
@@ -119,24 +149,23 @@ in_chroot() { chroot "$CHROOT" /usr/bin/env -i HOME=/root PATH=/usr/local/sbin:/
 # --- 3. Paquets ---------------------------------------------------------------
 log "apt-get update"
 in_chroot apt-get update
-# dpkg s'auto-met-à-jour parfois de façon instable au milieu d'une grosse
-# transaction en chroot : le traiter seul d'abord évite une course.
-in_chroot apt-get install --only-upgrade -y dpkg
 in_chroot apt-get upgrade -y
-log "Installation des paquets : ${PACKAGES[*]}"
-in_chroot apt-get install -y "${PACKAGES[@]}"
+log "Installation des paquets (${#PACKAGES[@]} paquets, sans recommandations)"
+# --no-install-recommends garde l'image légère ; c'est pour cela que les pilotes
+# d'entrée X (xserver-xorg-input-libinput) sont listés explicitement, sans quoi
+# le clavier et la souris ne fonctionneraient pas sous X.
+in_chroot apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 
 # live-boot doit être présent avant la génération de l'initramfs pour que ses
-# hooks y soient inclus ; on régénère explicitement quel que soit l'ordre d'apt.
+# hooks y soient inclus ; on régénère quel que soit l'ordre choisi par apt.
 log "Régénération de l'initramfs avec le support live-boot"
 in_chroot update-initramfs -u -k all
 
 # --- 4. killbit et overlay ----------------------------------------------------
 log "Installation de killbit et de l'overlay"
 install -D -m 0755 -o root -g root "$WORK_ROOT/killbit" "$CHROOT/usr/local/bin/killbit"
-printf '%s  killbit\n' "$actual_sha" > "$CHROOT/usr/local/share/killbit.sha256"
-printf 'url=%s\nsha256=%s\nbuilt=%s\n' \
-  "$KILLBIT_URL" "$actual_sha" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+printf 'url=%s\nsha256=%s\nbase=debian-%s\nbuilt=%s\n' \
+  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   > "$CHROOT/etc/killbit-image-release"
 
 cp -a "$OVERLAY_SRC/." "$CHROOT/"
@@ -145,9 +174,10 @@ cp -a "$OVERLAY_SRC/." "$CHROOT/"
 while IFS= read -r -d '' rel; do
   chown root:root "$CHROOT/$rel"
 done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
-chmod 0755 "$CHROOT/usr/local/sbin/killbit-launcher.sh"
-chmod 0600 "$CHROOT/etc/netplan/01-killbit-dhcp.yaml"
+chmod 0755 "$CHROOT/usr/local/sbin/killbit-session.sh"
+chmod 0644 "$CHROOT/etc/systemd/network/10-dhcp.network"
 
+# Connexion automatique en root sur tty1, qui enchaîne sur la session graphique.
 install -d -m 0755 "$CHROOT/etc/systemd/system/getty@tty1.service.d"
 cat > "$CHROOT/etc/systemd/system/getty@tty1.service.d/override.conf" <<'EOF'
 [Service]
@@ -155,20 +185,21 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
 
-# live-config ne configure pas le réseau (aucun composant DHCP dans
-# /lib/live/config) et /etc/netplan est vide dans un chroot debootstrap : sans
-# networkd+resolved activés et sans le netplan DHCP de l'overlay, le live
-# démarre sans adresse IP et killbit ne peut rien remonter.
-in_chroot systemctl enable systemd-networkd.service systemd-resolved.service
+# Sans networkd activé et sans fichier .network, l'image démarre sans adresse IP
+# et killbit ne peut remonter aucun rapport.
+in_chroot systemctl enable systemd-networkd.service systemd-resolved.service killbit-ready.service
 
 echo "killbit-live" > "$CHROOT/etc/hostname"
 
 # --- 5. Chargeur UEFI (GRUB), construit DANS le chroot ------------------------
-# L'hôte n'a ainsi besoin que de xorriso.
 log "Construction du chargeur UEFI (GRUB x86_64-efi)"
+# NE PAS redefinir prefix ici. grub-mkstandalone embarque ses modules dans un
+# memdisk et prefix pointe dessus ; le faire pointer vers l'ISO fait chercher
+# les modules dans /boot/grub/x86_64-efi/ qui n'existe pas sur le media, et
+# GRUB tombe sur son invite avec « configfile.mod not found ». Verifie en VM.
+# search suffit : il positionne $root sur l'ISO pour la lecture du menu.
 cat > "$CHROOT/tmp/grub-embed.cfg" <<EOF
 search --no-floppy --set=root --label $VOLID
-set prefix=(\$root)/boot/grub
 configfile /boot/grub/grub.cfg
 EOF
 
@@ -188,6 +219,7 @@ rm -f "$CHROOT/tmp/efi.img" "$CHROOT/tmp/BOOTX64.EFI" "$CHROOT/tmp/grub-embed.cf
 # --- 6. Nettoyage -------------------------------------------------------------
 in_chroot apt-get clean
 rm -f "$CHROOT/usr/sbin/policy-rc.d"
+rm -rf "$CHROOT/var/lib/apt/lists/"*
 # Supprimer resolv.conf sans rien mettre à la place laisse le live sans aucune
 # résolution DNS, donc sans remontée de rapport possible.
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "$CHROOT/etc/resolv.conf"
@@ -223,7 +255,7 @@ TIMEOUT 50
 LABEL killbit
   MENU LABEL killbit -- effacement securise
   KERNEL /live/vmlinuz
-  APPEND initrd=/live/initrd.img boot=live components quiet
+  APPEND initrd=/live/initrd.img boot=live components quiet console=tty0 console=ttyS0,115200n8
 EOF
 
 install -m 0644 "$WORK_ROOT/efi.img" "$ISO_STAGE/boot/grub/efi.img"
@@ -232,7 +264,7 @@ set default=0
 set timeout=5
 
 menuentry "killbit -- effacement securise" {
-    linux /live/vmlinuz boot=live components quiet
+    linux /live/vmlinuz boot=live components quiet console=tty0 console=ttyS0,115200n8
     initrd /live/initrd.img
 }
 EOF

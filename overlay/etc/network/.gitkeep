@@ -1,0 +1,7 @@
+Dossier volontairement vide.
+
+live-boot tente d'ecrire /etc/network/interfaces au demarrage et affiche sinon
+"/init: line 29: can't create /root/etc/network/interfaces: nonexistent
+directory". Le message est inoffensif mais inquietant pour un benevole devant
+la machine. Creer le dossier suffit a le faire disparaitre. Le reseau reste
+gere par systemd-networkd.

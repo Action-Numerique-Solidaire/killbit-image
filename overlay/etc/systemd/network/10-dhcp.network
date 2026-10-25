@@ -1,0 +1,11 @@
+# Sans ce fichier, l'image live démarre sans adresse IP et killbit ne peut
+# remonter aucun rapport. Debian n'installe pas netplan : on configure
+# directement systemd-networkd, ce qui évite une dépendance de plus.
+[Match]
+Name=en* eth*
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+RouteMetric=100
