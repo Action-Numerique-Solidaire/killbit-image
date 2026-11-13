@@ -1,10 +1,9 @@
 #!/bin/sh
-# Session graphique minimale : openbox pour la gestion de fenêtres, et un
-# terminal plein écran. L'environnement graphique est conservé pour pouvoir
-# afficher plus tard la page d'état locale de killbit dans un navigateur.
+# Utilisé uniquement par une image construite avec KILLBIT_WITH_BROWSER=1.
+# Pas de gestionnaire de fenêtres : un terminal occupe l'écran, et firefox
+# servira la page d'état locale de killbit le jour où elle existera.
 xset s off -dpms          # pas de mise en veille pendant un effacement long
-openbox &
-exec xterm -maximized \
+exec xterm -geometry 200x55 \
      -fa 'DejaVu Sans Mono' -fs 12 \
      -bg black -fg white \
      -title 'killbit' \

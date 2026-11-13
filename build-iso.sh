@@ -28,9 +28,29 @@ KILLBIT_URL="${KILLBIT_URL:-https://github.com/r3dge/ANS-public/raw/refs/heads/m
 # peut changer sans préavis, et on ne grave pas une image dont on ignore le
 # contenu. Renseigner cette variable fige la version.
 KILLBIT_SHA256="${KILLBIT_SHA256:-}"
-# Navigateur embarqué pour la future page d'état locale de killbit.
-# 0 pour alléger l'ISO d'environ 266 Mo installés.
-KILLBIT_WITH_BROWSER="${KILLBIT_WITH_BROWSER:-1}"
+# Environnement graphique : l'image est console seule par défaut. killbit ne
+# sert aucune page d'état locale pour l'instant, et X + firefox pesaient 727 Mo
+# sur les 1101 Mo installés de l'ancienne image — les deux tiers du poids pour
+# une fonction qui n'a rien à afficher. Mettre cette variable à 1 réembarque X
+# et firefox, SANS gestionnaire de fenêtres, le jour où cette page existera.
+KILLBIT_WITH_BROWSER="${KILLBIT_WITH_BROWSER:-0}"
+
+# Point de remontée des rapports. Une seule source : l'écran d'accueil et
+# l'historique pré-rempli en sont tous deux dérivés, ils ne peuvent donc pas
+# diverger.
+KILLBIT_REPORT_URL="${KILLBIT_REPORT_URL:-https://actionnumeriquesolidaire.org}"
+
+# Disposition clavier de la console. L'opérateur doit taper un identifiant de
+# poste et une URL : sur un clavier AZERTY avec une disposition US, « / » et
+# « : » ne sont pas là où il les cherche.
+KILLBIT_KEYMAP="${KILLBIT_KEYMAP:-fr}"
+
+# Compression du squashfs. zstd décompresse plusieurs fois plus vite que xz, ce
+# qui raccourcit autant le démarrage chez l'opérateur que les tests d'amorçage,
+# pour quelques Mo de plus. Le noyau Debian 13 déclare CONFIG_SQUASHFS_ZSTD=y,
+# donc l'image reste montable (vérifié dans /boot/config-*).
+SQUASHFS_COMP="${KILLBIT_SQUASHFS_COMP:-zstd}"
+SQUASHFS_LEVEL="${KILLBIT_SQUASHFS_LEVEL:-19}"
 
 # Prérequis déduits du binaire, pas devinés :
 #   readelf -d : libcurl.so.4, libsodium.so.23, libstdc++.so.6, libgcc_s.so.1
@@ -50,18 +70,34 @@ PACKAGES=(
   # et --no-install-recommends il n'est pas tiré, et le noyau panique au
   # démarrage sur « Attempted to kill init ». Vérifié en VM.
   linux-image-amd64 systemd-sysv live-boot live-config live-config-systemd
-  # micrologiciels ciblés : réseau et divers. On évite volontairement les gros
-  # blobs GPU, qui pèsent des centaines de Mo pour un outil sans interface 3D.
-  firmware-linux-free firmware-misc-nonfree firmware-realtek firmware-iwlwifi
-  # environnement graphique minimal (openbox + xterm, pas de bureau complet)
-  xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-all
-  xinit xauth x11-xserver-utils openbox xterm fonts-dejavu-core dbus-x11
-  # confort opérateur
+  # micrologiciels : réseau filaire et divers. Pas de blobs GPU (des centaines
+  # de Mo pour un outil sans interface 3D), et pas de micrologiciel Wi-Fi :
+  # l'image n'embarque ni wpasupplicant ni aucun moyen de saisir un SSID, et
+  # 10-dhcp.network ne s'applique qu'à en*/eth*. Le Wi-Fi est donc inutilisable
+  # par construction, et son micrologiciel Intel pesait 111 Mo pour rien.
+  firmware-linux-free firmware-misc-nonfree firmware-realtek
+  # zstd : sans ce binaire dans le chroot, initramfs-tools avertit « No zstd in
+  # /usr/bin:/sbin:/bin, using gzip » et retombe sur gzip, alors que zstd est le
+  # réglage par défaut de Debian 13. L'initramfs est alors plus gros et plus lent
+  # à décompresser à chaque démarrage, pour 1 Mo économisé à la construction.
+  zstd
+  # confort opérateur en console. console-setup applique la disposition clavier :
+  # sans elle, saisir « https:// » et un identifiant au clavier AZERTY est une
+  # épreuve.
   less nano kbd console-setup
-  # amorçage
+  # amorçage. Servent uniquement à FABRIQUER l'image, puis sont purgés du chroot
+  # avant le squashfs (étape 6) : ils n'ont rien à faire dans l'image livrée.
   isolinux syslinux-common grub-efi-amd64-bin grub-common mtools dosfstools
 )
-[[ "$KILLBIT_WITH_BROWSER" == "1" ]] && PACKAGES+=(firefox-esr)
+BUILD_ONLY_PACKAGES=(isolinux syslinux-common grub-efi-amd64-bin grub-common mtools dosfstools)
+
+# Mode navigateur : X minimal et firefox, sans gestionnaire de fenêtres.
+if [[ "$KILLBIT_WITH_BROWSER" == "1" ]]; then
+  PACKAGES+=(
+    xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-all
+    xinit xauth fonts-dejavu-core xterm firefox-esr
+  )
+fi
 
 log() { printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { printf 'ERREUR : %b\n' "$*" >&2; exit 1; }
@@ -97,8 +133,17 @@ cleanup() {
 trap cleanup EXIT
 
 bind_mount() {
-  local target="$1"; shift
+  local target="$1"
+  shift
   mount "$@" "$target"
+  # Détacher la propagation du montage. Sans cela, / étant monté en « shared »
+  # sur une Ubuntu de bureau, un démontage côté chroot se propage à l'hôte :
+  # une construction interrompue a ainsi cassé le /dev/pts d'une machine, qui a
+  # dû être redémarrée. En rslave, le chroot reçoit les changements de l'hôte
+  # mais ne lui en renvoie aucun.
+  mount --make-rslave "$target" 2>/dev/null \
+    || mount --make-slave "$target" 2>/dev/null \
+    || echo "AVERTISSEMENT : propagation non détachée pour $target" >&2
   mounted+=("$target")
 }
 
@@ -146,6 +191,22 @@ exit 101
 EOF
 chmod +x "$CHROOT/usr/sbin/policy-rc.d"
 
+# Documentation, pages de manuel et traductions : une cinquantaine de Mo dans
+# une base minbase, davantage une fois la centaine de paquets installée, pour
+# une image que personne ne lit hors ligne. Les règles ne s'appliquent qu'aux
+# installations suivantes : ce que debootstrap a déjà posé est retiré à l'étape 6.
+install -d -m 0755 "$CHROOT/etc/dpkg/dpkg.cfg.d"
+cat > "$CHROOT/etc/dpkg/dpkg.cfg.d/01-killbit-minimal" <<'EOF'
+path-exclude=/usr/share/doc/*
+path-exclude=/usr/share/man/*
+path-exclude=/usr/share/info/*
+path-exclude=/usr/share/groff/*
+path-exclude=/usr/share/locale/*
+# Le français est conservé : c'est la langue des opérateurs.
+path-include=/usr/share/locale/fr/*
+path-include=/usr/share/locale/fr_FR*/*
+EOF
+
 in_chroot() { chroot "$CHROOT" /usr/bin/env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive "$@"; }
 
 # --- 3. Paquets ---------------------------------------------------------------
@@ -166,8 +227,10 @@ in_chroot update-initramfs -u -k all
 # --- 4. killbit et overlay ----------------------------------------------------
 log "Installation de killbit et de l'overlay"
 install -D -m 0755 -o root -g root "$WORK_ROOT/killbit" "$CHROOT/usr/local/bin/killbit"
-printf 'url=%s\nsha256=%s\nbase=debian-%s\nbuilt=%s\n' \
-  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+printf 'url=%s\nsha256=%s\nbase=debian-%s\nreport_url=%s\nmode=%s\nbuilt=%s\n' \
+  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$KILLBIT_REPORT_URL" \
+  "$([[ "$KILLBIT_WITH_BROWSER" == "1" ]] && echo graphique || echo console)" \
+  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   > "$CHROOT/etc/killbit-image-release"
 
 cp -a "$OVERLAY_SRC/." "$CHROOT/"
@@ -179,12 +242,39 @@ done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
 chmod 0755 "$CHROOT/usr/local/sbin/killbit-session.sh"
 chmod 0644 "$CHROOT/etc/systemd/network/10-dhcp.network"
 
+# Historique pré-rempli : la commande d'effacement est alors accessible d'une
+# seule flèche vers le haut, ce qui évite de la retaper — URL comprise — sur
+# chaque poste. La dernière ligne est celle que renvoie la première flèche.
+# Le marqueur <id_du_poste> est laissé tel quel volontairement : s'il n'est pas
+# remplacé, le shell refuse la ligne (c'est une redirection invalide) et rien
+# ne s'exécute.
+cat > "$CHROOT/root/.bash_history" <<EOF
+killbit --help
+killbit --check
+killbit -i <id_du_poste> -u $KILLBIT_REPORT_URL
+EOF
+chmod 0600 "$CHROOT/root/.bash_history"
+
+# Hors mode navigateur, il n'y a pas de serveur X : laisser un .xinitrc
+# rendrait le chemin de démarrage ambigu dans .bash_profile.
+if [[ "$KILLBIT_WITH_BROWSER" != "1" ]]; then
+  rm -f "$CHROOT/root/.xinitrc"
+fi
+
 # Connexion automatique en root sur tty1, qui enchaîne sur la session graphique.
 install -d -m 0755 "$CHROOT/etc/systemd/system/getty@tty1.service.d"
 cat > "$CHROOT/etc/systemd/system/getty@tty1.service.d/override.conf" <<'EOF'
 [Service]
 ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+EOF
+
+cat > "$CHROOT/etc/default/keyboard" <<EOF
+XKBMODEL="pc105"
+XKBLAYOUT="$KILLBIT_KEYMAP"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
 EOF
 
 # Sans networkd activé et sans fichier .network, l'image démarre sans adresse IP
@@ -220,7 +310,36 @@ in_chroot /bin/bash -c '
 install -m 0644 "$CHROOT/tmp/efi.img" "$WORK_ROOT/efi.img"
 rm -f "$CHROOT/tmp/efi.img" "$CHROOT/tmp/BOOTX64.EFI" "$CHROOT/tmp/grub-embed.cfg"
 
+# Les artefacts d'amorçage BIOS sont sortis du chroot MAINTENANT, pour que les
+# paquets qui les fournissent puissent être purgés avant le squashfs. Les lus
+# plus tard depuis le chroot, ils y auraient obligé à garder 37 Mo d'outils de
+# fabrication dans l'image livrée.
+log "Extraction des artefacts isolinux"
+install -d -m 0755 "$WORK_ROOT/bios"
+install -m 0644 "$CHROOT/usr/lib/ISOLINUX/isolinux.bin" "$WORK_ROOT/bios/isolinux.bin"
+install -m 0644 "$CHROOT/usr/lib/ISOLINUX/isohdpfx.bin" "$WORK_ROOT/bios/isohdpfx.bin"
+cp -a "$CHROOT/usr/lib/syslinux/modules/bios/"*.c32 "$WORK_ROOT/bios/" 2>/dev/null || true
+
 # --- 6. Nettoyage -------------------------------------------------------------
+# Les outils de fabrication de l'amorçage ne servent plus : leurs artefacts sont
+# déjà sortis du chroot. 37 Mo installés qui n'ont rien à faire dans une image
+# dont le seul rôle est d'effacer des disques.
+log "Purge des paquets de fabrication (${#BUILD_ONLY_PACKAGES[@]} paquets)"
+in_chroot apt-get purge -y "${BUILD_ONLY_PACKAGES[@]}"
+in_chroot apt-get autoremove --purge -y
+
+# Ce que debootstrap a posé avant les règles dpkg d'exclusion.
+log "Retrait de la documentation et des traductions déjà installées"
+for d in usr/share/doc usr/share/man usr/share/info usr/share/groff; do
+  if [[ -d "${CHROOT:?}/$d" ]]; then
+    find "${CHROOT:?}/$d" -mindepth 1 -delete 2>/dev/null || true
+  fi
+done
+if [[ -d "${CHROOT:?}/usr/share/locale" ]]; then
+  find "${CHROOT:?}/usr/share/locale" -mindepth 1 -maxdepth 1 -type d \
+    ! -name 'fr' ! -name 'fr_FR*' -exec rm -rf {} + 2>/dev/null || true
+fi
+
 in_chroot apt-get clean
 rm -f "$CHROOT/usr/sbin/policy-rc.d"
 rm -rf "$CHROOT/var/lib/apt/lists/"*
@@ -243,13 +362,14 @@ install -m 0644 "$initrd" "$ISO_STAGE/live/initrd.img"
 log "Construction de filesystem.squashfs"
 rm -f "$ISO_STAGE/live/filesystem.squashfs"
 mksquashfs "$CHROOT" "$ISO_STAGE/live/filesystem.squashfs" \
-  -comp xz -noappend -wildcards \
+  -comp "$SQUASHFS_COMP" -Xcompression-level "$SQUASHFS_LEVEL" \
+  -noappend -wildcards -no-progress \
   -e "boot/vmlinuz-*" -e "boot/initrd.img-*"
 
 # --- 8. Menus d'amorçage ------------------------------------------------------
 log "Préparation des chargeurs"
-install -m 0644 "$CHROOT/usr/lib/ISOLINUX/isolinux.bin" "$ISO_STAGE/isolinux/isolinux.bin"
-cp -a "$CHROOT/usr/lib/syslinux/modules/bios/"*.c32 "$ISO_STAGE/isolinux/" 2>/dev/null || true
+install -m 0644 "$WORK_ROOT/bios/isolinux.bin" "$ISO_STAGE/isolinux/isolinux.bin"
+cp -a "$WORK_ROOT/bios/"*.c32 "$ISO_STAGE/isolinux/" 2>/dev/null || true
 
 cat > "$ISO_STAGE/isolinux/isolinux.cfg" <<EOF
 DEFAULT killbit
@@ -281,7 +401,7 @@ rm -f "$OUTPUT_ISO"
 # -isohybrid-gpt-basdat rendent l'ISO dd-able sur clé USB dans les deux modes.
 xorriso -as mkisofs \
   -r -V "$VOLID" -J -l \
-  -isohybrid-mbr "$CHROOT/usr/lib/ISOLINUX/isohdpfx.bin" \
+  -isohybrid-mbr "$WORK_ROOT/bios/isohdpfx.bin" \
   -b isolinux/isolinux.bin -c isolinux/boot.cat \
   -no-emul-boot -boot-load-size 4 -boot-info-table \
   -eltorito-alt-boot \

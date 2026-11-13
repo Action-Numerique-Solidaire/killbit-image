@@ -63,8 +63,10 @@ L'image est hybride : la même clé démarre en BIOS hérité comme en UEFI.
    cause la plus fréquente d'un échec de démarrage.
 4. Choisissez la clé USB.
 
-Au démarrage, la machine ouvre automatiquement une session graphique avec un
-terminal en plein écran. Aucun mot de passe n'est demandé.
+Au démarrage, la machine ouvre automatiquement une **console texte** et vous
+connecte sans mot de passe. Il n'y a ni bureau ni fenêtres : l'image ne contient
+pas de serveur graphique, ce qui la rend beaucoup plus légère et plus rapide à
+démarrer.
 
 ---
 
@@ -78,18 +80,29 @@ Le terminal affiche :
   `AUCUNE adresse IP`, l'effacement local fonctionnera mais **la remontée du
   rapport échouera** — branchez un câble Ethernet avant de continuer ;
 - les **supports détectés**, avec taille, modèle et numéro de série ;
-- l'instruction à taper.
+- la **commande à lancer**, avec son adresse de remontée déjà renseignée.
 
 ---
 
 ## 5. Lancer un effacement
 
+**Appuyez sur la flèche HAUT.** La commande est déjà dans l'historique du
+shell, adresse de remontée comprise :
+
 ```
-killbit -i <id_du_poste>
+killbit -i <id_du_poste> -u https://actionnumeriquesolidaire.org
 ```
 
-`<id_du_poste>` est l'identifiant serveur de la machine, celui qui figure sur
-son étiquette.
+Remplacez `<id_du_poste>` par l'identifiant serveur de la machine, celui qui
+figure sur son étiquette, puis validez. Vous n'avez donc jamais à retaper
+l'adresse, qui est la source d'erreur la plus fréquente.
+
+> Si vous validez **sans** remplacer `<id_du_poste>`, le shell refuse la ligne
+> et rien ne s'exécute : les chevrons sont des caractères spéciaux. C'est un
+> garde-fou volontaire, pas une panne. Corrigez et relancez.
+
+Deux autres flèches HAUT remontent à `killbit --check` puis `killbit --help`,
+également pré-chargées.
 
 killbit pose ensuite ses propres questions, dont le choix de la méthode
 (*Purge* ou *Clear*, selon NIST SP 800-88 Rev. 2 et IEEE Std 2883-2022).
@@ -120,4 +133,7 @@ killbit pose ensuite ses propres questions, dont le choix de la méthode
 
 Pour un diagnostic plus poussé, les autres consoles texte restent accessibles
 avec `Ctrl+Alt+F2` à `F6`, et tous les outils habituels sont présents :
-`lsblk`, `smartctl`, `hdparm`, `nvme`, `dmidecode`, `lshw`.
+`lsblk`, `smartctl`, `hdparm`, `nvme`, `dmidecode`, `lshw`. La commande `aide`
+réaffiche l'écran d'accueil si vous l'avez perdu de vue.
+
+Le clavier est en disposition **française** par défaut.
