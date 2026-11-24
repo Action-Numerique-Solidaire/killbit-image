@@ -100,6 +100,32 @@ S'y ajoutent l'identification matérielle (`dmidecode`, `pciutils`, `usbutils`,
 `systemd-sysv`, `live-boot`, `live-config`) et le confort en console (`less`,
 `nano`, `kbd`, `console-setup`).
 
+### Les dépendances que killbit réclame lui-même
+
+Le binaire porte sa propre liste `REQUIRED_PACKAGES`, la contrôle au démarrage
+avec `dpkg-query -W -f='${Status}'` — donc **au niveau paquet, pas au niveau
+binaire** — et propose sinon un `sudo apt install`. Sur une image live, cette
+installation est au mieux lente, au pire impossible : les paquets sont donc
+embarqués.
+
+| Paquet | Ce que killbit en fait |
+|---|---|
+| `curl`, `hdparm`, `nvme-cli`, `util-linux`, `coreutils`, `smartmontools` | effacement et interrogation des supports |
+| `inxi` + `libcpanel-json-xs-perl` | `inxi … --output json` : inventaire matériel du rapport |
+| `lm-sensors` | `sensors -u` |
+| `upower` | `upower -i` |
+| `memtester` | test mémoire |
+| `network-manager` | `nmcli dev wifi list` |
+| `sudo` | killbit invoque littéralement `sudo apt update` / `sudo apt install` |
+
+C'est aussi pourquoi **NetworkManager est le gestionnaire réseau de l'image** et
+non `systemd-networkd` : deux gestionnaires sur les mêmes interfaces se gênent,
+et `nmcli` a besoin du sien. `systemd-resolved` reste en place pour le DNS,
+combinaison que NetworkManager utilise d'office.
+
+La CI applique le même critère que killbit sur chacun de ces paquets : une
+dépendance qui disparaîtrait ferait échouer la construction, pas l'atelier.
+
 L'URL et l'empreinte du binaire embarqué sont écrites dans
 `/etc/killbit-image-release`, pour savoir exactement ce qui a été gravé.
 
@@ -109,11 +135,15 @@ Les paquets sont installés **sans recommandations**.
 
 | | Avant | Après |
 |---|---|---|
-| ISO publiée | 522 Mo | **215 Mo** |
-| Système embarqué sur disque | — | 371 Mo |
-| Paquets installés dans l'image | — | 171 |
-| Construction à froid | — | 186 s |
+| ISO publiée | 522 Mo | **233 Mo** |
+| Système embarqué sur disque | — | 450 Mo |
+| Paquets installés dans l'image | — | 209 |
+| Construction à froid | — | 184 s |
 | Amorçage jusqu'au marqueur | — | ~6 s de temps noyau |
+
+Les 233 Mo incluent les dépendances que killbit réclame lui-même (voir plus
+bas) : 125,7 Mo installés, mais seulement 18 Mo d'ISO, perl et NetworkManager
+se compressant bien.
 
 Les tailles d'ISO sont mesurées sur les images elles-mêmes. Les 727 Mo et 111 Mo
 cités plus bas viennent d'une simulation d'installation (`apt-get install -s`)
@@ -150,8 +180,11 @@ debootstrap sans snapd. Debian fournit de vrais `.deb`.
 
 - **Secure Boot doit être désactivé** dans le firmware : le chargeur UEFI n'est
   pas signé. Le support de `shim-signed` est possible mais non implémenté.
-- **Pas de Wi-Fi.** Il faut un câble Ethernet pour que le rapport remonte.
-  L'effacement local fonctionne sans réseau.
+- **Pas de micrologiciel Wi-Fi.** `firmware-iwlwifi` pèse 111 Mo et n'est pas
+  embarqué. NetworkManager est présent — killbit appelle `nmcli` — mais sans
+  micrologiciel, `nmcli dev wifi list` ne trouvera rien sur la plupart des
+  portables : il faut un câble Ethernet pour que le rapport remonte.
+  L'effacement local, lui, fonctionne sans réseau.
 - L'URL par défaut du binaire pointe sur `refs/heads/main`, donc il peut changer
   sans préavis. Renseigner `KILLBIT_SHA256` pour figer une version.
 

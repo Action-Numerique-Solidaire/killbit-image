@@ -76,6 +76,18 @@ PACKAGES=(
   # 10-dhcp.network ne s'applique qu'à en*/eth*. Le Wi-Fi est donc inutilisable
   # par construction, et son micrologiciel Intel pesait 111 Mo pour rien.
   firmware-linux-free firmware-misc-nonfree firmware-realtek
+  # Dependances declarees par killbit lui-meme. Elles ne sont pas optionnelles :
+  # le binaire porte une liste REQUIRED_PACKAGES, la controle au demarrage avec
+  # « dpkg-query -W -f='${Status}' » — donc au niveau paquet, pas binaire — et
+  # propose sinon de l'installer avec « sudo apt install ». Sur une image live
+  # sans depot a jour, cette installation est au mieux lente, au pire
+  # impossible : il faut les embarquer.
+  #
+  # Chacune est reellement appelee a l'execution, verifie dans les chaines du
+  # binaire : inxi -G -s -N -A -C -M -m -I --output json (inventaire materiel,
+  # d'ou libcpanel-json-xs-perl pour la sortie JSON), sensors -u, upower -i,
+  # memtester, nmcli dev wifi list.
+  sudo inxi libcpanel-json-xs-perl memtester lm-sensors upower network-manager
   # zstd : sans ce binaire dans le chroot, initramfs-tools avertit « No zstd in
   # /usr/bin:/sbin:/bin, using gzip » et retombe sur gzip, alors que zstd est le
   # réglage par défaut de Debian 13. L'initramfs est alors plus gros et plus lent
@@ -240,7 +252,6 @@ while IFS= read -r -d '' rel; do
   chown root:root "$CHROOT/$rel"
 done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
 chmod 0755 "$CHROOT/usr/local/sbin/killbit-session.sh"
-chmod 0644 "$CHROOT/etc/systemd/network/10-dhcp.network"
 
 # Historique pré-rempli : la commande d'effacement est alors accessible d'une
 # seule flèche vers le haut, ce qui évite de la retaper — URL comprise — sur
@@ -277,9 +288,14 @@ XKBOPTIONS=""
 BACKSPACE="guess"
 EOF
 
-# Sans networkd activé et sans fichier .network, l'image démarre sans adresse IP
-# et killbit ne peut remonter aucun rapport.
-in_chroot systemctl enable systemd-networkd.service systemd-resolved.service killbit-ready.service
+# killbit appelle « nmcli dev wifi list » : NetworkManager doit tourner, et deux
+# gestionnaires réseau concurrents sur les mêmes interfaces se gênent. On retient
+# donc NetworkManager seul pour les interfaces, et systemd-resolved pour le DNS
+# — c'est la combinaison que NetworkManager détecte et utilise d'office, et
+# /etc/resolv.conf pointe sur son stub.
+# Sans cela l'image démarre sans adresse IP et killbit ne remonte aucun rapport.
+in_chroot systemctl enable NetworkManager.service systemd-resolved.service killbit-ready.service
+in_chroot systemctl disable systemd-networkd.service 2>/dev/null || true
 
 echo "killbit-live" > "$CHROOT/etc/hostname"
 

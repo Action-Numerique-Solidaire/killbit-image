@@ -47,6 +47,8 @@ fi
 printf '  ----------------------------------------------------------------\n'
 printf '  Pour lancer un effacement :\n\n'
 printf '      killbit -i <id_du_poste> -u %s\n\n' "$report_url"
+printf "  L'identifiant figure sur l'etiquette QRcode du poste, au format\n"
+printf '      R21062200075\n\n'
 printf "  Cette commande est DEJA DANS L'HISTORIQUE : appuyez sur la\n"
 printf "  touche FLECHE HAUT, puis remplacez <id_du_poste> par\n"
 printf "  l'identifiant du poste avant de valider.\n\n"

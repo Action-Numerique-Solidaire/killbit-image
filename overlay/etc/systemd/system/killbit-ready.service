@@ -3,7 +3,7 @@
 # qui démarre d'une ISO qui panique, et ce défaut est déjà passé inaperçu une fois.
 [Unit]
 Description=Marqueur de disponibilite de l'image killbit
-After=multi-user.target systemd-networkd.service
+After=multi-user.target NetworkManager.service
 Wants=multi-user.target
 
 [Service]

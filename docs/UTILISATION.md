@@ -94,7 +94,7 @@ killbit -i <id_du_poste> -u https://actionnumeriquesolidaire.org
 ```
 
 Remplacez `<id_du_poste>` par l'identifiant serveur de la machine, celui qui
-figure sur son étiquette, puis validez. Vous n'avez donc jamais à retaper
+figure sur son **étiquette QRcode**, au format `R21062200075`, puis validez. Vous n'avez donc jamais à retaper
 l'adresse, qui est la source d'erreur la plus fréquente.
 
 > Si vous validez **sans** remplacer `<id_du_poste>`, le shell refuse la ligne
@@ -137,3 +137,7 @@ avec `Ctrl+Alt+F2` à `F6`, et tous les outils habituels sont présents :
 réaffiche l'écran d'accueil si vous l'avez perdu de vue.
 
 Le clavier est en disposition **française** par défaut.
+
+Toutes les dépendances que killbit réclame sont déjà dans l'image : il ne doit
+jamais vous proposer d'en installer. S'il le fait, signalez-le — l'image a un
+défaut, et sur un poste hors ligne cette installation ne peut pas aboutir.

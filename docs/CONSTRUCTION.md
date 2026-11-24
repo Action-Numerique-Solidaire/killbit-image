@@ -165,9 +165,13 @@ racine du chroot.
 | `root/.bash_history` | **Généré par le script**, pas présent dans l'overlay : il dérive de `KILLBIT_REPORT_URL`, pour que l'écran d'accueil et l'historique ne puissent pas diverger. Dernière ligne = première flèche vers le haut. |
 | `root/.xinitrc` | Mode navigateur uniquement, et **sans gestionnaire de fenêtres**. Retiré de l'image en mode console, pour que le chemin de démarrage reste sans ambiguïté. |
 | `usr/local/sbin/killbit-session.sh` | Écran d'accueil : identité de l'image, réseau, supports, commande à lancer. Puis un shell interactif. `--aide-seule` pour le réafficher. |
-| `etc/systemd/network/10-dhcp.network` | DHCP sur `en*` et `eth*`. |
 | `etc/systemd/system/killbit-ready.service` | Émet `KILLBIT-IMAGE-READY` sur la console série. C'est ce que le test d'amorçage attend. |
 | `etc/network/` | Dossier vide, voir le tableau des pièges. |
+
+Le fichier `systemd-networkd` qui portait le DHCP a été retiré : killbit appelle
+`nmcli dev wifi list`, NetworkManager doit donc tourner, et deux gestionnaires
+réseau sur les mêmes interfaces se gênent. NetworkManager gère les interfaces,
+`systemd-resolved` le DNS.
 
 **L'image n'efface jamais rien toute seule** : `killbit` n'est appelé nulle part
 avec `--yes`. L'opérateur tape la commande, et killbit garde ses confirmations.

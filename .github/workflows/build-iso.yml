@@ -132,6 +132,27 @@ jobs:
             else echo "::error::bibliotheque absente : $l"; fail=1; fi
           done
 
+          echo "--- dependances exigees par killbit (meme critere que lui) ---"
+          # killbit porte une liste REQUIRED_PACKAGES et la controle avec
+          # « dpkg-query -W -f='${Status}' ». On applique le meme test sur la
+          # base dpkg de l'image : une dependance manquante fait proposer a
+          # l'operateur un « sudo apt install » qui ne peut pas aboutir hors
+          # ligne. C'est arrive en atelier.
+          for p in curl hdparm nvme-cli inxi util-linux coreutils \
+                   libcpanel-json-xs-perl smartmontools memtester lm-sensors \
+                   upower network-manager sudo; do
+            st=$(sudo dpkg-query --admindir=/mnt/sq/var/lib/dpkg -W -f='${Status}' "$p" 2>/dev/null || true)
+            if [ "$st" = "install ok installed" ]; then echo "  OK       $p"
+            else echo "::error::dependance killbit absente de l_image : $p ($st)"; fail=1; fi
+          done
+
+          echo "--- NetworkManager doit etre actif : killbit appelle nmcli ---"
+          if sudo test -e /mnt/sq/etc/systemd/system/multi-user.target.wants/NetworkManager.service; then
+            echo "  OK       NetworkManager active au demarrage"
+          else
+            echo "::error::NetworkManager non active : nmcli echouera"; fail=1
+          fi
+
           echo "--- la commande doit etre prete dans l_historique ---"
           if sudo grep -q 'killbit -i <id_du_poste> -u http' /mnt/sq/root/.bash_history; then
             echo "  OK       commande d_effacement en derniere ligne d_historique"
