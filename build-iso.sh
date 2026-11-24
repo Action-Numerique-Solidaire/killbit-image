@@ -20,7 +20,23 @@ CHROOT="$WORK_ROOT/chroot"
 ISO_STAGE="$WORK_ROOT/iso"
 DISTRO="${KILLBIT_DISTRO:-trixie}"
 MIRROR="${KILLBIT_MIRROR:-http://deb.debian.org/debian}"
-OUTPUT_ISO="${1:-$WORK_ROOT/killbit-live.iso}"
+# Front de l'operateur sur tty1. Deux valeurs :
+#   shell  (defaut) : ecran d'accueil en texte, puis un shell. L'operateur tape
+#                     lui-meme la commande, pre-remplie dans l'historique.
+#   guide           : front ncurses (dialog) qui ne demande que l'identifiant du
+#                     poste, puis lance killbit avec --yes. Aucune confirmation
+#                     de killbit, donc une seule dans le front, au recapitulatif.
+KILLBIT_FRONT="${KILLBIT_FRONT:-shell}"
+case "$KILLBIT_FRONT" in
+  shell|guide) ;;
+  *) printf 'ERREUR : KILLBIT_FRONT doit valoir shell ou guide (recu : %s)\n' \
+       "$KILLBIT_FRONT" >&2; exit 1 ;;
+esac
+# Les deux images coexistent dans la meme release : elles ne peuvent pas porter
+# le meme nom de fichier par defaut.
+DEFAULT_ISO_NAME="killbit-live.iso"
+[[ "$KILLBIT_FRONT" == "guide" ]] && DEFAULT_ISO_NAME="killbit-live-guide.iso"
+OUTPUT_ISO="${1:-$WORK_ROOT/$DEFAULT_ISO_NAME}"
 VOLID="KILLBIT"
 
 KILLBIT_URL="${KILLBIT_URL:-https://github.com/r3dge/ANS-public/raw/refs/heads/main/bin/killbit}"
@@ -34,6 +50,13 @@ KILLBIT_SHA256="${KILLBIT_SHA256:-}"
 # une fonction qui n'a rien à afficher. Mettre cette variable à 1 réembarque X
 # et firefox, SANS gestionnaire de fenêtres, le jour où cette page existera.
 KILLBIT_WITH_BROWSER="${KILLBIT_WITH_BROWSER:-0}"
+
+# Wi-Fi : micrologiciels et wpasupplicant. Actif par defaut, parce que killbit
+# mesure le Wi-Fi de chaque portable et remonte le resultat au serveur ; sans
+# cela il remonte une panne qui n'existe pas. Voir le bloc de paquets plus bas
+# pour le detail et le cout. Mettre a 0 pour une image volontairement reduite,
+# en sachant que tous les rapports porteront « wifi non operationnel ».
+KILLBIT_WITH_WIFI="${KILLBIT_WITH_WIFI:-1}"
 
 # Point de remontée des rapports. Une seule source : l'écran d'accueil et
 # l'historique pré-rempli en sont tous deux dérivés, ils ne peuvent donc pas
@@ -70,11 +93,9 @@ PACKAGES=(
   # et --no-install-recommends il n'est pas tiré, et le noyau panique au
   # démarrage sur « Attempted to kill init ». Vérifié en VM.
   linux-image-amd64 systemd-sysv live-boot live-config live-config-systemd
-  # micrologiciels : réseau filaire et divers. Pas de blobs GPU (des centaines
-  # de Mo pour un outil sans interface 3D), et pas de micrologiciel Wi-Fi :
-  # l'image n'embarque ni wpasupplicant ni aucun moyen de saisir un SSID, et
-  # 10-dhcp.network ne s'applique qu'à en*/eth*. Le Wi-Fi est donc inutilisable
-  # par construction, et son micrologiciel Intel pesait 111 Mo pour rien.
+  # micrologiciels : réseau filaire et divers. Pas de blobs GPU, qui pèsent des
+  # centaines de Mo pour un outil sans interface 3D. Le Wi-Fi est plus bas,
+  # conditionné à KILLBIT_WITH_WIFI.
   firmware-linux-free firmware-misc-nonfree firmware-realtek
   # Dependances declarees par killbit lui-meme. Elles ne sont pas optionnelles :
   # le binaire porte une liste REQUIRED_PACKAGES, la controle au demarrage avec
@@ -102,6 +123,39 @@ PACKAGES=(
   isolinux syslinux-common grub-efi-amd64-bin grub-common mtools dosfstools
 )
 BUILD_ONLY_PACKAGES=(isolinux syslinux-common grub-efi-amd64-bin grub-common mtools dosfstools)
+
+# Wi-Fi. killbit teste le Wi-Fi de chaque portable — « nmcli dev wifi list »
+# dans run_laptop_and_wifi_check, après avoir vu une batterie avec « upower -e »
+# — et remonte le résultat au serveur sous "Type":"Wifi". Sans micrologiciel ni
+# wpasupplicant, la carte ne s'initialise pas, nmcli ne renvoie rien, et le
+# rapport porte « wifi non opérationnel » sur un poste dont la carte marche
+# peut-être très bien. Ce n'était donc pas une limitation de confort mais une
+# mesure fausse, enregistrée à chaque passage.
+#
+# Le coût sur l'ISO n'est pas la taille installée : squashfs recompresse ces
+# blobs à peu près comme le fait le .deb. Mesuré dans le chroot (deb/installé) :
+#   firmware-iwlwifi     15,9 / 111,4 Mo  Intel, majoritaire sur le parc pro
+#   firmware-atheros     28,1 /  95,0 Mo  ath10k et ath11k (ath9k est dans le noyau)
+#   firmware-brcm80211    5,1 /  17,9 Mo  Broadcom, Mac et grand public
+#   firmware-libertas     3,5 /  11,1 Mo  Marvell
+#   wpasupplicant + deps  1,7 /   4,6 Mo  sans lui NetworkManager ne pilote rien
+#   wireless-regdb       0,01 /  0,04 Mo  base réglementaire ; sans elle le
+#                                         balayage est restreint ou refusé
+# firmware-ti-connectivity est écarté : wl12xx équipe des cartes embarquées,
+# pas les portables d'un parc de réemploi.
+if [[ "$KILLBIT_WITH_WIFI" == "1" ]]; then
+  PACKAGES+=(
+    wpasupplicant wireless-regdb
+    firmware-iwlwifi firmware-atheros firmware-brcm80211 firmware-libertas
+  )
+fi
+
+# Mode guide : le front ncurses. dialog plutot que whiptail parce qu'il
+# s'appuie sur libncursesw6, deja tiree par nano, la ou whiptail ajouterait
+# libnewt et libslang pour le meme service.
+if [[ "$KILLBIT_FRONT" == "guide" ]]; then
+  PACKAGES+=(dialog)
+fi
 
 # Mode navigateur : X minimal et firefox, sans gestionnaire de fenêtres.
 if [[ "$KILLBIT_WITH_BROWSER" == "1" ]]; then
@@ -239,8 +293,9 @@ in_chroot update-initramfs -u -k all
 # --- 4. killbit et overlay ----------------------------------------------------
 log "Installation de killbit et de l'overlay"
 install -D -m 0755 -o root -g root "$WORK_ROOT/killbit" "$CHROOT/usr/local/bin/killbit"
-printf 'url=%s\nsha256=%s\nbase=debian-%s\nreport_url=%s\nmode=%s\nbuilt=%s\n' \
-  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$KILLBIT_REPORT_URL" \
+printf 'url=%s\nsha256=%s\nbase=debian-%s\nreport_url=%s\nfront=%s\nwifi=%s\nmode=%s\nbuilt=%s\n' \
+  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$KILLBIT_REPORT_URL" "$KILLBIT_FRONT" \
+  "$([[ "$KILLBIT_WITH_WIFI" == "1" ]] && echo oui || echo non)" \
   "$([[ "$KILLBIT_WITH_BROWSER" == "1" ]] && echo graphique || echo console)" \
   "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   > "$CHROOT/etc/killbit-image-release"
@@ -253,6 +308,15 @@ while IFS= read -r -d '' rel; do
 done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
 chmod 0755 "$CHROOT/usr/local/sbin/killbit-session.sh"
 
+# .bash_profile choisit le front sur la presence du script, pas sur un drapeau :
+# le meme fichier sert donc aux deux images. En mode shell, le retirer est ce
+# qui fait tomber le choix sur l'accueil en texte.
+if [[ "$KILLBIT_FRONT" == "guide" ]]; then
+  chmod 0755 "$CHROOT/usr/local/sbin/killbit-guide.sh"
+else
+  rm -f "$CHROOT/usr/local/sbin/killbit-guide.sh"
+fi
+
 # Historique pré-rempli : la commande d'effacement est alors accessible d'une
 # seule flèche vers le haut, ce qui évite de la retaper — URL comprise — sur
 # chaque poste. La dernière ligne est celle que renvoie la première flèche.
@@ -264,6 +328,11 @@ killbit --help
 killbit --check
 killbit -i <id_du_poste> -u $KILLBIT_REPORT_URL
 EOF
+# Dans l'image guidee, le shell n'est qu'un detour : la premiere fleche vers le
+# haut doit ramener au front, pas a une commande d'effacement a completer.
+if [[ "$KILLBIT_FRONT" == "guide" ]]; then
+  echo "guide" >> "$CHROOT/root/.bash_history"
+fi
 chmod 0600 "$CHROOT/root/.bash_history"
 
 # Hors mode navigateur, il n'y a pas de serveur X : laisser un .xinitrc

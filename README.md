@@ -7,8 +7,15 @@ effacer de façon sécurisée les supports des PC reconditionnés d'Action Numé
 Solidaire.
 
 L'image est **console seule** : ni serveur graphique, ni gestionnaire de
-fenêtres. Au démarrage, un écran d'accueil liste les disques détectés et l'état
-réseau, et la commande d'effacement attend déjà dans l'historique du shell.
+fenêtres.
+
+Deux images sont publiées à chaque construction, issues du même script et
+différant d'un seul paquet :
+
+| Image | Au démarrage | Pour qui |
+|---|---|---|
+| `killbit-live.iso` | écran d'accueil, puis un shell ; la commande d'effacement attend dans l'historique, à une flèche HAUT | bénévole à l'aise en ligne de commande, dépannage |
+| `killbit-live-guide.iso` | front ncurses plein écran qui ne demande **que l'identifiant du poste**, affiche un récapitulatif, puis lance killbit avec `--yes` | atelier, passages en série |
 
 ## Documentation
 
@@ -29,9 +36,29 @@ Chaque construction est **publiée en release** :
 sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Vérifier l'empreinte avec le fichier `.sha256` joint avant de graver.
+Vérifier l'empreinte avant de graver, depuis le dossier de téléchargement :
 
-## Au démarrage
+```bash
+sha256sum -c killbit-live.iso.sha256
+```
+
+## Au démarrage — image guidée
+
+Le poste démarre directement sur un front en texte plein écran. L'opérateur
+saisit l'identifiant qui figure sur l'étiquette QRcode, relit un récapitulatif —
+identifiant, serveur de remontée, adresse réseau, et **la liste des disques qui
+vont être effacés** — puis confirme.
+
+C'est la **seule** confirmation : killbit est appelé avec `--yes` et ne demande
+plus rien, méthode d'effacement comprise (*Purge* par défaut). Le bouton
+sélectionné d'office au récapitulatif est `Annuler`. La sortie de killbit est
+journalisée dans `/var/log/killbit/`.
+
+Si aucun disque n'est visible, le front le dit et ne propose pas d'effacer.
+Le menu de fin enchaîne sur le poste suivant, un shell, l'extinction ou le
+redémarrage ; depuis le shell, la commande `guide` ramène au front.
+
+## Au démarrage — image classique
 
 La machine ouvre une **console texte** et connecte l'opérateur sans mot de passe.
 L'écran d'accueil affiche l'identité de l'image, l'état réseau, les supports
@@ -51,9 +78,9 @@ Si l'opérateur valide sans remplacer `<id_du_poste>`, le shell refuse la ligne
 et rien ne s'exécute : les chevrons sont des caractères spéciaux. C'est un
 garde-fou volontaire.
 
-**Aucun effacement n'est déclenché automatiquement.** `killbit` n'est jamais
-appelé avec `--yes` : c'est l'opérateur qui valide, et killbit conserve ses
-propres confirmations.
+**Dans cette image, aucun effacement n'est déclenché automatiquement.**
+`killbit` n'y est jamais appelé avec `--yes` : c'est l'opérateur qui valide, et
+killbit conserve ses propres confirmations.
 
 Le clavier est en disposition française par défaut (`KILLBIT_KEYMAP`), parce que
 saisir une URL sur un clavier AZERTY mal configuré est une épreuve.
@@ -62,6 +89,7 @@ saisir une URL sur un clavier AZERTY mal configuré est une épreuve.
 
 ```bash
 sudo ./build-iso.sh /chemin/killbit-live.iso
+sudo KILLBIT_FRONT=guide ./build-iso.sh /chemin/killbit-live-guide.iso
 ```
 
 | Variable | Rôle |
@@ -70,6 +98,8 @@ sudo ./build-iso.sh /chemin/killbit-live.iso
 | `KILLBIT_SHA256` | Empreinte attendue ; la construction échoue si elle diffère |
 | `KILLBIT_REPORT_URL` | Adresse de remontée pré-remplie dans l'historique et l'écran d'accueil |
 | `KILLBIT_KEYMAP` | Disposition clavier de la console (défaut `fr`) |
+| `KILLBIT_FRONT` | `shell` (défaut) ou `guide`, le front ncurses qui lance `killbit --yes` |
+| `KILLBIT_WITH_WIFI` | `0` retire micrologiciels Wi-Fi et `wpasupplicant` ; tous les rapports porteront alors « wifi non opérationnel » |
 | `KILLBIT_WITH_BROWSER` | `1` réembarque X et firefox, **sans** gestionnaire de fenêtres |
 | `KILLBIT_SQUASHFS_COMP` / `_LEVEL` | Compression du squashfs (défaut `zstd` niveau 19) |
 | `KILLBIT_ISO_WORK` | Répertoire de travail (défaut `/srv/killbit-iso-build`) |
@@ -133,19 +163,23 @@ Les paquets sont installés **sans recommandations**.
 
 ## Résultat mesuré
 
-| | Avant | Après |
-|---|---|---|
-| ISO publiée | 522 Mo | **233 Mo** |
-| Système embarqué sur disque | — | 450 Mo |
-| Paquets installés dans l'image | — | 209 |
-| Construction à froid | — | 184 s |
-| Amorçage jusqu'au marqueur | — | ~6 s de temps noyau |
+| | Image d'origine | Après minimisation | Aujourd'hui, Wi-Fi compris |
+|---|---|---|---|
+| ISO publiée | 522 Mo | 233 Mo | **338 Mo** |
+| Système embarqué sur disque | — | 450 Mo | 690 Mo |
+| Paquets installés dans l'image | — | 209 | 219 (221 pour l'image guidée) |
+| Construction à froid | — | 184 s | 225 s |
+| Amorçage jusqu'au marqueur | — | ~6 s | ~5,5 s de temps noyau |
 
-Les 233 Mo incluent les dépendances que killbit réclame lui-même (voir plus
-bas) : 125,7 Mo installés, mais seulement 18 Mo d'ISO, perl et NetworkManager
-se compressant bien.
+Les deux images font la même taille à l'octet près : `dialog` et le script du
+front pèsent moins que l'arrondi.
 
-Les tailles d'ISO sont mesurées sur les images elles-mêmes. Les 727 Mo et 111 Mo
+Les 105 Mo repris entre les deux dernières colonnes sont les micrologiciels
+Wi-Fi et `wpasupplicant`. Ils ne sont pas un confort : killbit **mesure** le
+Wi-Fi de chaque portable et remonte le résultat au serveur. Sans eux, tous les
+rapports portaient une panne Wi-Fi qui n'existait pas.
+
+Toutes ces tailles d'ISO sont mesurées sur les images elles-mêmes. Les 727 Mo
 cités plus bas viennent d'une simulation d'installation (`apt-get install -s`)
 dans une base Debian 13 : c'est ce qui a servi à décider quoi retirer, avant
 toute construction.
@@ -157,10 +191,16 @@ Chaque retrait est chiffré, et la CI vérifie qu'il ne revient pas par accident
 | Retiré | Gain | Pourquoi |
 |---|---|---|
 | X, `openbox`, `xterm`, `firefox-esr` | **727 Mo installés** | killbit ne sert aucune page d'état locale pour l'instant : c'étaient les deux tiers du poids de l'image pour une fonction qui n'avait rien à afficher. `KILLBIT_WITH_BROWSER=1` les réembarque, sans gestionnaire de fenêtres, le jour où cette page existera. |
-| `firmware-iwlwifi` | **111 Mo** | L'image n'embarque ni `wpasupplicant` ni aucun moyen de saisir un SSID, et sa configuration réseau ne s'applique qu'à `en*`/`eth*`. Le Wi-Fi était inutilisable par construction. |
 | `isolinux`, `syslinux-common`, `grub-*`, `mtools`, `dosfstools` | **37 Mo** | Servent à fabriquer l'image ; leurs artefacts sont extraits du chroot, puis les paquets sont purgés avant le squashfs. |
 | `/usr/share/doc`, `man`, `info`, locales hors français | ~50 Mo | Personne ne lit les pages de manuel d'un outil d'effacement hors ligne. |
 | Micrologiciels GPU | des centaines de Mo | Outil sans interface 3D. |
+
+Les micrologiciels **Wi-Fi** ont fait partie de cette liste, et n'y sont plus.
+Le raisonnement — « l'image ne sait pas saisir un SSID, donc le micrologiciel ne
+peut servir à rien » — ignorait que killbit lance `nmcli dev wifi list` sur tout
+poste où `upower` voit une batterie, et remonte le résultat sous `"Type":"Wifi"`.
+Ce n'était pas un confort réseau mais une **mesure matérielle du poste traité**,
+et elle était fausse à chaque passage. Coût du correctif : +105 Mo d'ISO.
 
 ## Pourquoi Debian 13, et pas Ubuntu
 
@@ -180,29 +220,45 @@ debootstrap sans snapd. Debian fournit de vrais `.deb`.
 
 - **Secure Boot doit être désactivé** dans le firmware : le chargeur UEFI n'est
   pas signé. Le support de `shim-signed` est possible mais non implémenté.
-- **Pas de micrologiciel Wi-Fi.** `firmware-iwlwifi` pèse 111 Mo et n'est pas
-  embarqué. NetworkManager est présent — killbit appelle `nmcli` — mais sans
-  micrologiciel, `nmcli dev wifi list` ne trouvera rien sur la plupart des
-  portables : il faut un câble Ethernet pour que le rapport remonte.
-  L'effacement local, lui, fonctionne sans réseau.
+- **L'image guidée lance `killbit --yes`.** Elle ne pose qu'une question, le
+  récapitulatif, et plus rien ensuite. C'est son intérêt en atelier et son
+  risque : un identifiant saisi sur le mauvais poste efface le mauvais poste.
+  L'image classique reste publiée pour qui préfère les confirmations de killbit.
+- **Les micrologiciels Wi-Fi embarqués couvrent Intel, Atheros, Broadcom,
+  Marvell et Realtek.** Une carte hors de ces familles sera rapportée comme non
+  opérationnelle par killbit. `firmware-ti-connectivity` n'est pas embarqué :
+  wl12xx équipe des cartes embarquées, pas les portables d'un parc de réemploi.
+- La connexion Wi-Fi elle-même n'est pas automatisée : l'image obtient son
+  adresse par DHCP sur le réseau filaire. Pour le Wi-Fi, `nmcli dev wifi connect
+  <SSID> password <mot_de_passe>` depuis un shell. L'effacement local, lui,
+  fonctionne sans réseau.
 - L'URL par défaut du binaire pointe sur `refs/heads/main`, donc il peut changer
   sans préavis. Renseigner `KILLBIT_SHA256` pour figer une version.
 
 ## Intégration continue
 
-`.github/workflows/build-iso.yml` construit l'ISO sur `ubuntu-24.04` à chaque
-push sur `main`, sur chaque PR et à la demande. Avant publication, le workflow
-vérifie que :
+`.github/workflows/build-iso.yml` construit **les deux images en parallèle**,
+par une matrice, sur `ubuntu-24.04` : à chaque push sur `main`, sur chaque PR et
+à la demande. Les deux sortant du même script, les construire côte à côte coûte
+le temps d'une seule. Avant publication, le workflow vérifie que :
 
 - le catalogue El Torito contient **une entrée BIOS et une entrée UEFI** ;
-- le squashfs contient réellement `killbit`, ses outils, les trois
-  bibliothèques attendues, l'écran d'accueil et **l'historique pré-rempli avec
-  la commande d'effacement** ;
-- les composants retirés sont bien **absents** — X, openbox, xterm, firefox, les
-  outils de fabrication et les micrologiciels Wi-Fi. Sans ce second contrôle, la
-  minimisation se déferait au premier ajout de paquet distrait ;
-- l'image **démarre réellement**, en BIOS et en UEFI, dans QEMU. Les deux
-  amorçages sont menés en parallèle.
+- le `.sha256` publié est au nom nu et se vérifie réellement ;
+- le squashfs contient `killbit`, ses outils, les trois bibliothèques attendues,
+  le front de l'opérateur, **l'historique pré-rempli avec la commande
+  d'effacement**, et de quoi faire aboutir le test Wi-Fi de killbit ;
+- les composants retirés sont bien **absents** — X, openbox, xterm, firefox et
+  les outils de fabrication. Sans ce contrôle, la minimisation se déferait au
+  premier ajout de paquet distrait ;
+- **les deux images diffèrent réellement** : `dialog` et le front guidé présents
+  dans l'une, absents de l'autre, `front=` conforme dans le fichier de release.
+  Sans cela, elles pourraient être livrées identiques sans que rien n'alerte ;
+- les images **démarrent réellement**, en BIOS et en UEFI, dans QEMU, les deux
+  amorçages menés en parallèle ;
+- le **front ncurses s'affiche et réagit** : le test attend que l'écran devienne
+  bleu — `dialog` peint le fond, une console en texte jamais — tape un
+  identifiant au clavier du poste via le moniteur QEMU, et vérifie que l'écran
+  change. Il s'arrête avant la confirmation : aucun effacement n'est déclenché.
 
 Ces garde-fous existent parce qu'une ISO peut se construire sans erreur tout en
 étant inutilisable : amorçable en BIOS seul, amputée d'une dépendance, ou prise

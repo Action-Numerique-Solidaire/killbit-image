@@ -4,21 +4,42 @@ Guide destiné aux bénévoles qui effacent les supports des PC reconditionnés.
 
 ---
 
-## 1. Récupérer l'image
+## 1. Choisir l'image
+
+Chaque release contient **deux images**, construites depuis le même script et
+avec le même contenu à un paquet près. Elles ne diffèrent que par ce qui
+s'affiche au démarrage.
+
+| Image | Au démarrage | Pour qui |
+|---|---|---|
+| `killbit-live.iso` | écran d'accueil, puis un shell. La commande d'effacement est pré-remplie dans l'historique : flèche HAUT pour la rappeler, puis remplacer l'identifiant. | bénévole à l'aise en ligne de commande, ou dépannage |
+| `killbit-live-guide.iso` | front en texte plein écran qui ne demande **que l'identifiant du poste**, affiche un récapitulatif, puis lance killbit sans plus aucune question. | atelier, passages en série, bénévole occasionnel |
+
+Les deux effacent de la même façon : c'est le même binaire killbit, avec les
+mêmes options. La différence est l'écran, pas le traitement.
+
+> **Une seule confirmation dans l'image guidée.** Elle lance killbit avec
+> `--yes`, donc killbit ne demande plus rien. La seule question posée est le
+> récapitulatif du front : identifiant, serveur, liste des disques qui vont
+> être effacés. Après ce « Effacer », plus rien ne s'arrête.
+
+## 2. Récupérer l'image
 
 Deux sources, au choix :
 
 - la release **`latest`** du dépôt, reconstruite à chaque modification ;
 - une release versionnée `vX.Y.Z`, si vous voulez une version figée.
 
-Chaque release contient deux fichiers :
+Chaque image est accompagnée de son empreinte :
 
 | Fichier | Rôle |
 |---|---|
-| `killbit-live.iso` | l'image à écrire sur la clé |
-| `killbit-live.iso.sha256` | l'empreinte, pour vérifier le téléchargement |
+| `killbit-live.iso`, `killbit-live-guide.iso` | les images à écrire sur la clé |
+| `…​.iso.sha256` | l'empreinte, pour vérifier le téléchargement |
 
 ### Vérifier l'image avant de graver
+
+Depuis le dossier où se trouvent l'ISO et son empreinte :
 
 ```bash
 sha256sum -c killbit-live.iso.sha256
@@ -29,7 +50,7 @@ téléchargement est corrompu : recommencez, ne gravez pas.
 
 ---
 
-## 2. Écrire sur une clé USB
+## 3. Écrire sur une clé USB
 
 > **Attention** : `dd` écrase la cible sans rien demander. Vérifiez deux fois le
 > nom du périphérique — une erreur ici efface votre propre disque.
@@ -53,7 +74,7 @@ L'image est hybride : la même clé démarre en BIOS hérité comme en UEFI.
 
 ---
 
-## 3. Démarrer le PC à effacer
+## 4. Démarrer le PC à effacer
 
 1. Branchez la clé et allumez la machine.
 2. Ouvrez le menu de démarrage — souvent `F12`, parfois `F9`, `F11`, `Échap`
@@ -70,7 +91,7 @@ démarrer.
 
 ---
 
-## 4. L'écran d'accueil
+## 5a. Image classique : l'écran d'accueil
 
 Le terminal affiche :
 
@@ -84,7 +105,7 @@ Le terminal affiche :
 
 ---
 
-## 5. Lancer un effacement
+## 5b. Image classique : lancer un effacement
 
 **Appuyez sur la flèche HAUT.** La commande est déjà dans l'historique du
 shell, adresse de remontée comprise :
@@ -107,8 +128,9 @@ Deux autres flèches HAUT remontent à `killbit --check` puis `killbit --help`,
 killbit pose ensuite ses propres questions, dont le choix de la méthode
 (*Purge* ou *Clear*, selon NIST SP 800-88 Rev. 2 et IEEE Std 2883-2022).
 
-> **L'effacement est irréversible.** Rien ne se lance automatiquement : l'image
-> n'appelle jamais killbit avec `--yes`.
+> **L'effacement est irréversible.** Dans cette image, rien ne se lance
+> automatiquement : elle n'appelle jamais killbit avec `--yes`, et c'est killbit
+> qui pose ses questions.
 
 ### Autres commandes utiles
 
@@ -121,20 +143,61 @@ killbit pose ensuite ses propres questions, dont le choix de la méthode
 
 ---
 
-## 6. En cas de problème
+## 6. Image guidée : le front en texte
+
+Rien à taper au clavier sauf l'identifiant. Le poste démarre directement sur
+l'écran de saisie.
+
+**1. Identifiant du poste.** Saisissez l'identifiant qui figure sur
+l'**étiquette QRcode**, au format `R21062200075`, puis `Valider`. L'écran
+rappelle l'adresse de remontée et l'état du réseau.
+
+Le clavier est en disposition **française** : les chiffres s'obtiennent avec
+`Maj`, comme sur le clavier du portable que vous traitez.
+
+Si l'identifiant ne ressemble pas au format attendu, le front le signale et
+propose de corriger — il ne refuse pas, car d'autres formats existent, mais une
+faute de frappe rattacherait le rapport au mauvais poste et ne se verrait
+qu'après l'effacement.
+
+Le bouton `Aide` réaffiche l'écran d'explication.
+
+**2. Récapitulatif.** Avant d'effacer, le front affiche l'identifiant saisi, le
+serveur de remontée, l'adresse réseau obtenue et **la liste des disques qui vont
+être effacés**, avec taille, modèle et numéro de série. Relisez cette liste.
+
+> C'est la **seule** confirmation. killbit est lancé avec `--yes` : il ne
+> redemandera rien, ni pour la méthode d'effacement — *Purge* par défaut — ni
+> avant d'écrire. Le bouton sélectionné par défaut est `Annuler`.
+
+**3. Effacement.** L'écran passe en texte brut : c'est killbit qui parle. Sa
+sortie est journalisée dans `/var/log/killbit/<identifiant>-<date>.log`.
+
+**4. Poste suivant.** À la fin, un menu propose de traiter un autre poste, de
+réafficher l'aide, d'éteindre ou de redémarrer. `Shell` donne la main en ligne
+de commande ; la commande `guide` y ramène au front.
+
+Si aucun disque n'est détecté, le front le dit et ne propose pas d'effacer :
+le contrôleur est probablement en mode RAID dans le firmware du poste, à
+basculer en AHCI.
+
+---
+
+## 7. En cas de problème
 
 | Symptôme | Piste |
 |---|---|
 | La clé n'apparaît pas au menu de démarrage | Secure Boot actif, ou clé écrite sur une partition au lieu du disque entier |
 | L'écran reste noir après le choix de la clé | Matériel très ancien : essayez le mode BIOS hérité (CSM) dans le firmware |
-| `AUCUNE adresse IP` | Câble Ethernet débranché, ou pas de DHCP sur le réseau |
+| `AUCUNE adresse IP` | Câble Ethernet débranché, ou pas de DHCP. Pour le Wi-Fi : `nmcli dev wifi connect <SSID> password <mot_de_passe>` depuis un shell |
 | Un disque n'apparaît pas dans la liste | Contrôleur en mode RAID dans le firmware : basculez-le en AHCI |
 | killbit refuse d'effacer un disque | Lisez le message : un disque gelé par le firmware (`frozen`) demande un cycle de veille/réveil |
+| killbit rapporte un Wi-Fi non opérationnel | Si le poste est un portable dont le Wi-Fi fonctionne, signalez-le : les micrologiciels Wi-Fi sont embarqués depuis la version `v0.2.0`, et un rapport faux sur ce point est un défaut de l'image |
 
 Pour un diagnostic plus poussé, les autres consoles texte restent accessibles
 avec `Ctrl+Alt+F2` à `F6`, et tous les outils habituels sont présents :
 `lsblk`, `smartctl`, `hdparm`, `nvme`, `dmidecode`, `lshw`. La commande `aide`
-réaffiche l'écran d'accueil si vous l'avez perdu de vue.
+réaffiche l'écran d'accueil ou l'aide du front guidé, selon l'image.
 
 Le clavier est en disposition **française** par défaut.
 

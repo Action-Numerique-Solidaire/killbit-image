@@ -115,13 +115,54 @@ Les deux tiers du poids servaient une fonction qui n'avait rien à afficher.
 L'image est donc console seule, et `KILLBIT_WITH_BROWSER=1` réembarque X et
 firefox — **sans gestionnaire de fenêtres** — le jour où cette page existera.
 
-### Pas de Wi-Fi, donc pas de micrologiciel Wi-Fi
+### Le Wi-Fi : écarté, puis réintégré sur constat d'erreur
 
-`firmware-iwlwifi` pesait 111 Mo. Or l'image n'embarque ni `wpasupplicant`, ni
-`iwd`, ni aucun moyen de saisir un SSID, et `10-dhcp.network` ne s'applique
-qu'à `en*` et `eth*`. Le Wi-Fi était inutilisable **par construction** : ces
-111 Mo ne pouvaient servir à rien. Le jour où le Wi-Fi est voulu, il faudra
-bien plus que le micrologiciel, et ce sera une décision à part entière.
+Le Wi-Fi a d'abord été retiré par raisonnement : l'image ne sait pas saisir un
+SSID, sa configuration réseau ne couvrait que `en*` et `eth*`, donc le
+micrologiciel ne pouvait servir à rien. Les 111 Mo installés de
+`firmware-iwlwifi` ont été écartés sur cette base.
+
+Le raisonnement ignorait ce que fait killbit. Les chaînes du binaire le disent,
+dans `run_laptop_and_wifi_check` :
+
+```
+upower -e | grep battery            # pas de batterie -> "PC fixe, test wifi non realise"
+nmcli dev wifi list 2>/dev/null     # sinon
+"Le wifi de cette machine fonctionne."
+"Le wifi de cette machine n'est pas operationnel."
+```
+
+Le résultat part au serveur sous `"Type":"Wifi"`. **Le Wi-Fi n'est donc pas un
+moyen de connexion pour l'image, c'est une mesure matérielle du poste traité.**
+Sans micrologiciel ni `wpasupplicant`, la carte ne s'initialise pas, `nmcli` ne
+renvoie rien, et chaque portable passé en atelier est enregistré comme ayant un
+Wi-Fi en panne. Le défaut a été constaté en atelier, pas déduit.
+
+Les micrologiciels Wi-Fi sont donc embarqués, avec `wpasupplicant` — sans lui
+NetworkManager ne pilote aucune carte — et `wireless-regdb`, sans quoi le
+balayage est restreint ou refusé.
+
+| Paquet | `.deb` | Installé | Couvre |
+|---|---|---|---|
+| `firmware-iwlwifi` | 15,9 Mo | 111 Mo | Intel, majoritaire sur le parc professionnel |
+| `firmware-atheros` | 28,1 Mo | 95 Mo | ath10k, ath11k, ath12k (ath9k est dans le noyau) |
+| `firmware-brcm80211` | 5,1 Mo | 18 Mo | Broadcom : Mac et grand public |
+| `firmware-libertas` | 3,5 Mo | 11 Mo | Marvell |
+| `wpasupplicant` + dépendances | 1,7 Mo | 4,6 Mo | pilotage des cartes par NetworkManager |
+| `wireless-regdb` | 0,01 Mo | 0,04 Mo | base réglementaire |
+
+`firmware-ti-connectivity` est écarté : wl12xx équipe des cartes embarquées, pas
+les portables d'un parc de réemploi.
+
+**Le coût réel est mesuré, pas calculé** : l'ISO passe de 233 à 338 Mo, soit
+**+105 Mo**. La somme des `.deb` (54 Mo) aurait fait espérer moitié moins, mais
+squashfs en zstd par blocs de 128 Kio ne retrouve pas la compression d'un `.deb`
+en xz à dictionnaire large. Les 267 Mo de `/usr/lib/firmware` installés se
+répartissent ainsi : `iwlwifi` 96 Mo, `ath11k` 63 Mo, `ath10k` 19 Mo,
+`rtw89` 15 Mo, `brcm` 12 Mo, `mrvl` 9,3 Mo.
+
+`KILLBIT_WITH_WIFI=0` reconstruit l'image sans rien de tout cela, en sachant que
+tous les rapports porteront alors « wifi non opérationnel ».
 
 ### Les prérequis sont déduits du binaire
 
@@ -160,11 +201,12 @@ racine du chroot.
 
 | Chemin | Rôle |
 |---|---|
-| `root/.bash_profile` | Sur `tty1` uniquement, enchaîne sur l'accueil opérateur — ou sur `startx` si l'image a été construite en mode navigateur. Les autres consoles donnent un shell normal, utile au dépannage. |
-| `root/.bashrc` | Invite, réglages d'historique, alias `aide`. |
+| `root/.bash_profile` | Sur `tty1` uniquement, enchaîne sur le front : `killbit-guide.sh` s'il est présent, sinon `startx` en mode navigateur, sinon l'accueil en texte. Le choix se fait sur la **présence des fichiers**, pas sur un drapeau de construction, pour qu'un seul fichier serve à toutes les variantes. Les autres consoles donnent un shell normal, utile au dépannage. |
+| `root/.bashrc` | Invite, réglages d'historique, alias `aide` et, dans l'image guidée, `guide` pour revenir au front. |
 | `root/.bash_history` | **Généré par le script**, pas présent dans l'overlay : il dérive de `KILLBIT_REPORT_URL`, pour que l'écran d'accueil et l'historique ne puissent pas diverger. Dernière ligne = première flèche vers le haut. |
 | `root/.xinitrc` | Mode navigateur uniquement, et **sans gestionnaire de fenêtres**. Retiré de l'image en mode console, pour que le chemin de démarrage reste sans ambiguïté. |
-| `usr/local/sbin/killbit-session.sh` | Écran d'accueil : identité de l'image, réseau, supports, commande à lancer. Puis un shell interactif. `--aide-seule` pour le réafficher. |
+| `usr/local/sbin/killbit-session.sh` | Écran d'accueil en texte : identité de l'image, réseau, supports, commande à lancer. Puis un shell interactif. `--aide-seule` pour le réafficher. |
+| `usr/local/sbin/killbit-guide.sh` | Front ncurses (`dialog`) de l'image guidée : saisie de l'identifiant, récapitulatif, `killbit --yes`, journal dans `/var/log/killbit/`. **Retiré du chroot** quand `KILLBIT_FRONT=shell`. |
 | `etc/systemd/system/killbit-ready.service` | Émet `KILLBIT-IMAGE-READY` sur la console série. C'est ce que le test d'amorçage attend. |
 | `etc/network/` | Dossier vide, voir le tableau des pièges. |
 
@@ -173,8 +215,34 @@ Le fichier `systemd-networkd` qui portait le DHCP a été retiré : killbit appe
 réseau sur les mêmes interfaces se gênent. NetworkManager gère les interfaces,
 `systemd-resolved` le DNS.
 
-**L'image n'efface jamais rien toute seule** : `killbit` n'est appelé nulle part
-avec `--yes`. L'opérateur tape la commande, et killbit garde ses confirmations.
+### Les deux fronts, et ce que chacun promet
+
+`KILLBIT_FRONT` choisit ce qui s'affiche sur `tty1`. Les deux images sortent du
+même script et ne diffèrent que par un paquet, `dialog`, et par la présence de
+`killbit-guide.sh`.
+
+| | `shell` (défaut) | `guide` |
+|---|---|---|
+| ISO | `killbit-live.iso` | `killbit-live-guide.iso` |
+| Au démarrage | accueil en texte, puis un shell | front ncurses plein écran |
+| Saisie | l'opérateur tape la commande, pré-remplie dans l'historique | l'identifiant du poste, et rien d'autre |
+| Appel de killbit | sans `--yes` : killbit garde toutes ses confirmations | **avec `--yes`** : killbit ne demande plus rien |
+| Confirmations avant écriture | celles de killbit | **une seule**, le récapitulatif du front |
+
+Dans l'image `shell`, **rien ne s'efface tout seul** : `killbit` n'y est appelé
+nulle part avec `--yes`.
+
+Dans l'image `guide`, `--yes` est le but : enchaîner les postes sans répondre à
+des questions. C'est précisément pour cela que le front en pose une, et une
+seule, au récapitulatif — identifiant saisi, serveur, et **liste des disques qui
+vont être effacés**, avec leur taille, modèle et numéro de série. Le bouton
+sélectionné par défaut y est `Annuler`. Après ce « Effacer », plus rien
+n'interrompt l'opération.
+
+Le front se retire de son propre chemin dans deux cas : `dialog` absent de
+l'image, ou pas de terminal de contrôle. Il bascule alors sur l'accueil en
+texte, parce qu'un poste d'atelier qui démarre sur un écran noir serait pire
+qu'un poste sans front.
 
 ---
 
@@ -194,6 +262,8 @@ chroot et leurs artefacts en sont extraits.
 | `KILLBIT_SHA256` | vide | Empreinte attendue ; échec si différente |
 | `KILLBIT_REPORT_URL` | `https://actionnumeriquesolidaire.org` | Adresse de remontée, pré-remplie dans l'historique du shell et affichée à l'accueil |
 | `KILLBIT_KEYMAP` | `fr` | Disposition clavier de la console |
+| `KILLBIT_FRONT` | `shell` | `guide` construit l'image à front ncurses, qui lance `killbit --yes` |
+| `KILLBIT_WITH_WIFI` | `1` | `0` retire micrologiciels Wi-Fi et `wpasupplicant` ; tous les rapports porteront alors « wifi non opérationnel » |
 | `KILLBIT_WITH_BROWSER` | `0` | `1` réembarque X et firefox, sans gestionnaire de fenêtres |
 | `KILLBIT_SQUASHFS_COMP` | `zstd` | Compression du squashfs (`xz` pour quelques Mo de moins, au prix du temps) |
 | `KILLBIT_SQUASHFS_LEVEL` | `19` | Niveau de compression |
@@ -217,6 +287,32 @@ Il surveille aussi les motifs d'échec (`Kernel panic`, `emergency mode`…) pou
 échouer tout de suite plutôt qu'au bout du délai. Il utilise KVM si disponible,
 sinon l'émulation — environ deux minutes et demie dans ce cas.
 
+### Le front guidé
+
+```bash
+tests/front-test.sh killbit-live-guide.iso captures/
+```
+
+Un contrôle de contenu voit les fichiers, pas l'écran : un `.bash_profile` qui
+n'enchaîne pas ou un `dialog` qui n'ouvre rien laisserait l'opérateur devant une
+console noire sur un poste prêt à être effacé. Ce test regarde donc l'écran, et
+le verdict est automatique **sans OCR** :
+
+1. il attend le marqueur, puis **que l'écran devienne bleu** — `dialog` peint le
+   fond sur toute la surface, ce qu'une console en texte ne fait jamais. Le
+   seuil est de 40 % de pixels bleus ; l'écran de saisie en fait 78 % ;
+2. il tape `R21062200075` au clavier du poste, via le moniteur QEMU. Les
+   chiffres passent par `shift-<chiffre>` : la console est en AZERTY, où
+   `sendkey 2` produit « é » — ce qui a au passage confirmé que la disposition
+   `fr` est bien active ;
+3. il valide et vérifie que **l'écran a changé**, ce qui distingue un front
+   vivant d'une image figée ;
+4. il s'arrête là. Le dernier « Effacer » lance un effacement réel : ce test
+   n'en déclenche jamais, même sur disque virtuel.
+
+Les captures sont déposées en PNG dans le dossier indiqué, y compris quand le
+test échoue — c'est là qu'on veut voir l'écran.
+
 Ce test existe parce que **la vérification de contenu ne suffit pas** : une ISO
 a déjà contenu tous les bons fichiers tout en paniquant au démarrage.
 
@@ -227,31 +323,46 @@ a déjà contenu tous les bons fichiers tout en paniquant au démarrage.
 [`.github/workflows/build-iso.yml`](../.github/workflows/build-iso.yml),
 sur `ubuntu-24.04`.
 
-1. `shellcheck` sur les trois scripts. Il est **préinstallé** sur l'image des
-   runners : l'installer coûtait un `apt-get update` pour rien. Attention, il
-   est appelé sans seuil de sévérité, donc une remontée `info` suffit à faire
-   échouer le job — c'est voulu, mais ça surprend.
-2. **Choix du disque de travail** : `/mnt`, le disque temporaire du runner, est
+1. `shellcheck` sur tous les scripts du dépôt. Il est **préinstallé** sur
+   l'image des runners : l'installer coûtait un `apt-get update` pour rien.
+   Attention, il est appelé sans seuil de sévérité, donc une remontée `info`
+   suffit à faire échouer le job — c'est voulu, mais ça surprend.
+2. **Les deux images en parallèle**, par une matrice `front: [shell, guide]`.
+   Elles sortent du même script : les construire côte à côte coûte le temps
+   d'une seule. `fail-fast` est désactivé — si l'une casse, on veut savoir si
+   l'autre tient.
+3. **Choix du disque de travail** : `/mnt`, le disque temporaire du runner, est
    bien plus grand que la racine. L'y mettre a remplacé l'étape qui supprimait
    dotnet, android et ghc pour faire de la place — elle coûtait **90 secondes**,
    soit 18 % du job, pour un besoin qui n'existe plus depuis que l'image est
    légère. Repli automatique sur `RUNNER_TEMP` si `/mnt` manque de place.
-3. Construction.
-4. **Contrôle El Torito** : une entrée BIOS *et* une entrée UEFI. Une ISO BIOS
+4. Construction.
+5. **Contrôle El Torito** : une entrée BIOS *et* une entrée UEFI. Une ISO BIOS
    seul ne démarre pas sur du matériel post-2012 à CSM désactivé, et le défaut
    est invisible à l'œil nu.
-5. **Contrôle du contenu**, en deux volets. Ce qui doit être là : killbit, ses
-   outils, les trois bibliothèques, l'accueil opérateur, et l'historique
-   pré-rempli — la commande d'effacement y est cherchée littéralement. Et ce qui
-   doit avoir **disparu** : X, openbox, xterm, firefox, les outils de
-   fabrication, les micrologiciels Wi-Fi. Sans ce second volet, la minimisation
-   se déferait au premier ajout de paquet distrait, et personne ne le verrait.
-6. **Tests d'amorçage réels**, BIOS et UEFI menés **en parallèle**. Le runner
+6. **Contrôle de l'empreinte publiée** : format au nom nu, puis un
+   `sha256sum -c` réel. Le `.sha256` a un temps porté le chemin du runner, ce
+   qui rendait invérifiable la commande que la documentation donne pourtant.
+7. **Contrôle du contenu**, en trois volets.
+   Ce qui doit être là : killbit, ses outils, les trois bibliothèques, le front
+   de l'opérateur, l'historique pré-rempli — la commande d'effacement y est
+   cherchée littéralement — et de quoi faire aboutir le test Wi-Fi de killbit
+   (`wpa_supplicant`, `regulatory.db`, micrologiciels `iwlwifi`).
+   Ce qui doit avoir **disparu** : X, openbox, xterm, firefox, les outils de
+   fabrication. Sans ce volet, la minimisation se déferait au premier ajout de
+   paquet distrait, et personne ne le verrait.
+   Et ce qui **distingue les deux images** : `dialog` et `killbit-guide.sh`
+   présents dans l'image guidée, absents de l'autre, `front=` conforme dans
+   `/etc/killbit-image-release`. Sans ce volet, les deux images pourraient être
+   livrées identiques sans que rien n'alerte.
+8. **Tests d'amorçage réels**, BIOS et UEFI menés **en parallèle**. Le runner
    n'a pas KVM, les deux amorçages tournent donc en émulation : les enchaîner
    coûtait le double pour rien, les deux processus QEMU ne se gênant qu'à la
    marge sur quatre vCPU.
-7. Publication : prerelease glissante `latest` à chaque push sur `main`,
-   release versionnée sur tag `v*`.
+9. **Test du front ncurses** sur l'image guidée seulement (voir § 6).
+10. Publication, dans un **job distinct** : une seule release porte les deux
+    images, elle attend donc les deux constructions. Prerelease glissante
+    `latest` à chaque push sur `main`, release versionnée sur tag `v*`.
 
 ---
 
@@ -266,3 +377,12 @@ sur `ubuntu-24.04`.
 - L'image démarre en root avec connexion automatique, sans mot de passe. C'est
   volontaire — un outil d'atelier doit être immédiatement utilisable — mais
   cela suppose un contrôle physique de la machine.
+- **L'image guidée lance `killbit --yes`.** Elle ne pose qu'une question, le
+  récapitulatif, et plus rien ensuite. C'est son intérêt en atelier et son
+  risque : un identifiant saisi sur le mauvais poste efface le mauvais poste.
+  L'image `shell` reste disponible pour qui préfère les confirmations de
+  killbit.
+- Le test Wi-Fi de killbit dépend du micrologiciel de la carte. Les familles
+  Intel, Atheros, Broadcom, Marvell et Realtek sont embarquées ;
+  `firmware-ti-connectivity` ne l'est pas. Une carte hors de ces familles sera
+  rapportée comme non opérationnelle.

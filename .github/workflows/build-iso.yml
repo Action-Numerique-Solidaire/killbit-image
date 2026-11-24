@@ -19,6 +19,10 @@ on:
         description: "Réembarquer X + firefox, sans gestionnaire de fenêtres (1) ou image console seule (0)"
         required: false
         default: "0"
+      with_wifi:
+        description: "Embarquer les micrologiciels Wi-Fi et wpasupplicant (1) ou non (0, le rapport portera « wifi non opérationnel »)"
+        required: false
+        default: "1"
       report_url:
         description: "Point de remontée des rapports, pré-rempli dans l'historique du shell"
         required: false
@@ -31,6 +35,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  KILLBIT_URL_DEFAUT: "https://github.com/r3dge/ANS-public/raw/refs/heads/main/bin/killbit"
+  REPORT_URL_DEFAUT: "https://actionnumeriquesolidaire.org"
+
 jobs:
   shellcheck:
     runs-on: ubuntu-24.04
@@ -40,13 +48,27 @@ jobs:
       # un apt-get update pour rien.
       - run: |
           shellcheck --version
-          shellcheck build-iso.sh overlay/usr/local/sbin/killbit-session.sh tests/boot-test.sh
+          shellcheck build-iso.sh \
+            overlay/usr/local/sbin/killbit-session.sh \
+            overlay/usr/local/sbin/killbit-guide.sh \
+            tests/boot-test.sh tests/front-test.sh
 
   build:
     runs-on: ubuntu-24.04
     needs: shellcheck
-    permissions:
-      contents: write   # publication de la release
+    # Les deux images sortent du même script, avec le même contenu à un paquet
+    # près : les construire en parallèle coûte le temps d'une seule.
+    #   shell : écran d'accueil en texte, l'opérateur tape la commande.
+    #   guide : front ncurses, ne demande que l'identifiant, puis killbit --yes.
+    # fail-fast désactivé : si l'une casse, on veut savoir si l'autre tient.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - front: shell
+            iso: killbit-live.iso
+          - front: guide
+            iso: killbit-live-guide.iso
     steps:
       - uses: actions/checkout@v4
 
@@ -75,29 +97,37 @@ jobs:
         # grub-efi, mtools et dosfstools ne sont PAS installés ici, le chargeur
         # UEFI étant construit dans le chroot. isolinux non plus : ses artefacts
         # sont extraits du chroot.
+        # socat et python3-pil servent au test du front ncurses : dialogue avec
+        # le moniteur QEMU, et conversion des captures d'écran en PNG.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             debootstrap debian-archive-keyring squashfs-tools xorriso \
-            qemu-system-x86 ovmf
+            qemu-system-x86 ovmf socat python3-pil
 
       - name: Construire l'ISO
         env:
           KILLBIT_ISO_WORK: ${{ steps.work.outputs.dir }}
-          KILLBIT_URL: ${{ inputs.killbit_url || 'https://github.com/r3dge/ANS-public/raw/refs/heads/main/bin/killbit' }}
+          KILLBIT_URL: ${{ inputs.killbit_url || env.KILLBIT_URL_DEFAUT }}
           KILLBIT_SHA256: ${{ inputs.killbit_sha256 || '' }}
           KILLBIT_WITH_BROWSER: ${{ inputs.with_browser || '0' }}
-          KILLBIT_REPORT_URL: ${{ inputs.report_url || 'https://actionnumeriquesolidaire.org' }}
+          # PAS « inputs.with_wifi || '1' » : GitHub convertit les operandes de
+          # « || » en nombre, la chaine '0' y est donc fausse et un with_wifi=0
+          # explicite serait silencieusement remplace par 1. Le piege ne se voit
+          # pas sur with_browser, dont le repli vaut justement '0'.
+          KILLBIT_WITH_WIFI: ${{ inputs.with_wifi == '0' && '0' || '1' }}
+          KILLBIT_REPORT_URL: ${{ inputs.report_url || env.REPORT_URL_DEFAUT }}
+          KILLBIT_FRONT: ${{ matrix.front }}
         run: |
-          sudo -E ./build-iso.sh "$GITHUB_WORKSPACE/killbit-live.iso"
-          sudo chown "$USER" "$GITHUB_WORKSPACE/killbit-live.iso"*
-          ls -lh killbit-live.iso
+          sudo -E ./build-iso.sh "$GITHUB_WORKSPACE/${{ matrix.iso }}"
+          sudo chown "$USER" "$GITHUB_WORKSPACE/${{ matrix.iso }}"*
+          ls -lh "${{ matrix.iso }}"
 
       - name: Vérifier que l'ISO est amorçable en BIOS ET en UEFI
         # Une ISO BIOS seul ne démarre pas sur du matériel post-2012 à CSM
         # désactivé, et le défaut est invisible à l'œil nu.
         run: |
-          report=$(xorriso -indev killbit-live.iso -report_el_torito plain 2>/dev/null)
+          report=$(xorriso -indev "${{ matrix.iso }}" -report_el_torito plain 2>/dev/null)
           echo "$report"
           echo "$report" | grep -q 'BIOS' \
             || { echo "::error::Entrée El Torito BIOS absente"; exit 1; }
@@ -108,21 +138,28 @@ jobs:
         # Le .sha256 est joint à la release : il doit rester vérifiable par un
         # « sha256sum -c » lancé à côté de l'ISO téléchargée, donc ne contenir
         # que le nom de fichier nu, sans le chemin de ce runner.
+        env:
+          ISO: ${{ matrix.iso }}
         run: |
-          cat killbit-live.iso.sha256
-          grep -qE '^[0-9a-f]{64}  killbit-live\.iso$' killbit-live.iso.sha256 \
+          cat "$ISO.sha256"
+          grep -qE "^[0-9a-f]{64}  $ISO\$" "$ISO.sha256" \
             || { echo "::error::le .sha256 n_est pas au format nom nu"; exit 1; }
-          sha256sum -c killbit-live.iso.sha256
+          sha256sum -c "$ISO.sha256"
 
       - name: Vérifier le contenu de l'image
-        # Deux promesses à tenir, et chacune a son garde-fou :
-        #   1. ce qui doit y être : killbit, ses outils, l'accueil opérateur et
-        #      l'historique pré-rempli ;
+        # Trois promesses à tenir, et chacune a son garde-fou :
+        #   1. ce qui doit y être : killbit, ses outils, le front de l'opérateur
+        #      et l'historique pré-rempli ;
         #   2. ce qui ne doit PLUS y être. Sans ce second contrôle, la
-        #      minimisation se déferait au premier ajout de paquet distrait.
+        #      minimisation se déferait au premier ajout de paquet distrait ;
+        #   3. ce qui distingue les deux images l'une de l'autre, sans quoi
+        #      elles pourraient être livrées identiques sans que rien n'alerte.
+        env:
+          ISO: ${{ matrix.iso }}
+          FRONT: ${{ matrix.front }}
         run: |
           sudo mkdir -p /mnt/iso /mnt/sq
-          sudo mount -o loop,ro killbit-live.iso /mnt/iso
+          sudo mount -o loop,ro "$ISO" /mnt/iso
           sudo mount -o loop,ro /mnt/iso/live/filesystem.squashfs /mnt/sq
           fail=0
 
@@ -168,12 +205,58 @@ jobs:
             echo "::error::NetworkManager non active : nmcli echouera"; fail=1
           fi
 
+          echo "--- test Wi-Fi de killbit : il doit pouvoir aboutir ---"
+          # killbit lance « nmcli dev wifi list » sur tout poste ou upower voit
+          # une batterie, et remonte le resultat au serveur sous "Type":"Wifi".
+          # Sans wpasupplicant la carte n'est pas pilotee, sans micrologiciel
+          # elle ne s'initialise pas, sans base reglementaire le balayage est
+          # refuse : dans les trois cas le rapport annonce une panne Wi-Fi qui
+          # n'existe pas. C'est ce qui a ete observe en atelier.
+          # « -e || -L » et non « -e » seul : regulatory.db est un lien gere par
+          # les alternatives dpkg, qui pointe vers /etc/alternatives/... en
+          # chemin ABSOLU. Dans le squashfs monte, « test -e » suit ce chemin
+          # contre la racine du runner et declare le fichier absent. Meme piege
+          # que pour l'unite NetworkManager, deja tombe dedans une fois.
+          for f in usr/sbin/wpa_supplicant usr/lib/firmware/regulatory.db; do
+            if sudo test -e "/mnt/sq/$f" || sudo test -L "/mnt/sq/$f"; then
+              echo "  OK       $f"
+            else echo "::error::absent, le test Wi-Fi de killbit sera faux : $f"; fail=1; fi
+          done
+          if sudo find /mnt/sq/usr/lib/firmware -maxdepth 1 -name 'iwlwifi*' -print -quit 2>/dev/null | grep -q .; then
+            echo "  OK       micrologiciels iwlwifi (cartes Intel)"
+          else
+            echo "::error::micrologiciels iwlwifi absents : tout portable Intel sera declare sans Wi-Fi"; fail=1
+          fi
+
           echo "--- la commande doit etre prete dans l_historique ---"
           if sudo grep -q 'killbit -i <id_du_poste> -u http' /mnt/sq/root/.bash_history; then
-            echo "  OK       commande d_effacement en derniere ligne d_historique"
+            echo "  OK       commande d_effacement dans l_historique"
             sudo cat /mnt/sq/root/.bash_history | sed 's/^/           /'
           else
             echo "::error::la commande killbit -i ... -u ... n_est pas dans l_historique"; fail=1
+          fi
+
+          echo "--- ce qui distingue cette image : front=$FRONT ---"
+          if [ "$FRONT" = "guide" ]; then
+            presents="usr/local/sbin/killbit-guide.sh usr/bin/dialog"
+            absents=""
+          else
+            presents=""
+            absents="usr/local/sbin/killbit-guide.sh usr/bin/dialog"
+          fi
+          for f in $presents; do
+            if sudo test -x "/mnt/sq/$f"; then echo "  OK       $f"
+            else echo "::error::image guidee sans son front : $f"; fail=1; fi
+          done
+          for f in $absents; do
+            if sudo test -e "/mnt/sq/$f"; then
+              echo "::error::image shell livree avec le front guide : $f"; fail=1
+            else echo "  ABSENT   $f"; fi
+          done
+          if sudo grep -q "^front=$FRONT\$" /mnt/sq/etc/killbit-image-release; then
+            echo "  OK       front=$FRONT declare dans /etc/killbit-image-release"
+          else
+            echo "::error::/etc/killbit-image-release ne declare pas front=$FRONT"; fail=1
           fi
 
           echo "--- ne doit PLUS etre present (verrou de minimisation) ---"
@@ -183,9 +266,6 @@ jobs:
               echo "::error::present alors qu_il devrait etre absent : $f"; fail=1
             else echo "  ABSENT   $f"; fi
           done
-          if sudo find /mnt/sq/usr/lib/firmware -maxdepth 1 -name 'iwlwifi*' -print -quit 2>/dev/null | grep -q .; then
-            echo "::error::micrologiciels Wi-Fi iwlwifi presents (111 Mo inutilisables sans wpasupplicant)"; fail=1
-          else echo "  ABSENT   usr/lib/firmware/iwlwifi*"; fi
 
           echo "--- taille du systeme de fichiers embarque ---"
           sudo du -sh /mnt/sq | sed 's/^/  /'
@@ -201,8 +281,8 @@ jobs:
         timeout-minutes: 25
         run: |
           set -Eeuo pipefail
-          ./tests/boot-test.sh killbit-live.iso bios 900 > bios.log 2>&1 & pb=$!
-          ./tests/boot-test.sh killbit-live.iso uefi 900 > uefi.log 2>&1 & pu=$!
+          ./tests/boot-test.sh "${{ matrix.iso }}" bios 900 > bios.log 2>&1 & pb=$!
+          ./tests/boot-test.sh "${{ matrix.iso }}" uefi 900 > uefi.log 2>&1 & pu=$!
           rc=0
           wait "$pb" || rc=1
           wait "$pu" || rc=1
@@ -211,37 +291,87 @@ jobs:
           if [ "$rc" -ne 0 ]; then echo "::error::un amorçage a échoué"; fi
           exit $rc
 
+      - name: Test du front ncurses
+        # Le contrôle de contenu voit les fichiers, pas l'écran. Un
+        # .bash_profile qui n'enchaîne pas, un dialog qui n'ouvre rien, et
+        # l'opérateur se retrouve devant une console noire sur un poste prêt à
+        # être effacé. On regarde donc l'écran, et on y tape un identifiant.
+        if: matrix.front == 'guide'
+        timeout-minutes: 20
+        run: ./tests/front-test.sh "${{ matrix.iso }}" "$GITHUB_WORKSPACE/front-captures" 900
+
       - name: Récapitulatif
         if: always()
+        env:
+          ISO: ${{ matrix.iso }}
         run: |
           {
-            echo "### ISO killbit"
+            echo "### ${ISO} (front ${{ matrix.front }})"
             echo '```'
-            ls -lh killbit-live.iso 2>/dev/null || echo "(pas d'ISO)"
-            cat killbit-live.iso.sha256 2>/dev/null || true
+            ls -lh "$ISO" 2>/dev/null || echo "(pas d'ISO)"
+            cat "$ISO.sha256" 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: killbit-live-iso
+          name: iso-${{ matrix.front }}
           path: |
-            killbit-live.iso
-            killbit-live.iso.sha256
-          retention-days: 14
-          compression-level: 0   # le squashfs est déjà compressé
+            ${{ matrix.iso }}
+            ${{ matrix.iso }}.sha256
 
-      # --- Publication en release ------------------------------------------
-      - name: Publier la release glissante (push sur main)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Captures du front
+        # Les captures restent consultables même quand le test échoue : c'est
+        # justement là qu'on veut voir l'écran.
+        if: matrix.front == 'guide' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-front
+          path: front-captures
+          if-no-files-found: ignore
+
+  publier:
+    runs-on: ubuntu-24.04
+    needs: build
+    # Une seule release porte les deux images : la publication attend donc que
+    # les deux constructions soient passées, et se fait dans son propre job.
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: iso-*
+          merge-multiple: true
+
+      - name: Vérifier ce qui va être publié
+        run: |
+          set -Eeuo pipefail
+          ls -lh ./*.iso
+          # Les empreintes sont au nom nu : elles se verifient a cote des ISO.
+          for f in ./*.iso.sha256; do cat "$f"; sha256sum -c "$f"; done
+          test -f killbit-live.iso
+          test -f killbit-live-guide.iso
+
+      - name: Rédiger les notes
         run: |
           {
-            echo "Construction automatique depuis \`main\` (${GITHUB_SHA:0:7})."
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              echo "Version \`${GITHUB_REF_NAME}\`."
+            else
+              echo "Construction automatique depuis \`main\` (${GITHUB_SHA:0:7})."
+            fi
             echo
-            echo "ISO live hybride BIOS + UEFI, base Debian 13, embarquant killbit."
-            echo "Image **console seule** : ni serveur X ni gestionnaire de fenêtres."
+            echo "ISO live hybrides BIOS + UEFI, base Debian 13, embarquant killbit."
+            echo "Images **console seule** : ni serveur X ni gestionnaire de fenêtres."
+            echo
+            echo "| Image | Au démarrage |"
+            echo "|---|---|"
+            echo "| \`killbit-live.iso\` | écran d'accueil puis un shell ; la commande d'effacement est pré-remplie dans l'historique, flèche haut pour la rappeler |"
+            echo "| \`killbit-live-guide.iso\` | front ncurses qui ne demande que l'identifiant du poste, puis lance killbit avec \`--yes\` |"
+            echo
+            echo "L'image guidée ne pose qu'une seule question avant d'effacer :"
+            echo "le récapitulatif. killbit, lui, ne demande plus rien."
             echo
             echo '```bash'
             echo 'sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync'
@@ -250,13 +380,23 @@ jobs:
             echo "Secure Boot doit etre desactive : le chargeur n'est pas signe."
             echo
             echo '```'
-            cat killbit-live.iso.sha256
+            cat killbit-live.iso.sha256 killbit-live-guide.iso.sha256
             echo '```'
           } > notes.md
-          # Release glissante : on remplace l'ISO precedente plutot que
+          cat notes.md
+
+      - name: Publier la release glissante (push sur main)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Release glissante : on remplace les ISO precedentes plutot que
           # d'accumuler une release par commit.
-          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-          gh release create latest killbit-live.iso killbit-live.iso.sha256 \
+          gh release delete latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create latest \
+            killbit-live.iso killbit-live.iso.sha256 \
+            killbit-live-guide.iso killbit-live-guide.iso.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Derniere construction (main)" \
             --notes-file notes.md \
             --prerelease
@@ -266,21 +406,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          {
-            echo "ISO live hybride BIOS + UEFI, base Debian 13, embarquant killbit."
-            echo "Image **console seule** : ni serveur X ni gestionnaire de fenêtres."
-            echo
-            echo '```bash'
-            echo 'sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync'
-            echo '```'
-            echo
-            echo "Secure Boot doit etre desactive : le chargeur n'est pas signe."
-            echo
-            echo '```'
-            cat killbit-live.iso.sha256
-            echo '```'
-          } > notes.md
           gh release create "$GITHUB_REF_NAME" \
             killbit-live.iso killbit-live.iso.sha256 \
+            killbit-live-guide.iso killbit-live-guide.iso.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
             --title "killbit-image $GITHUB_REF_NAME" \
             --notes-file notes.md

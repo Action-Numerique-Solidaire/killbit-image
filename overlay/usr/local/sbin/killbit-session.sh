@@ -28,7 +28,9 @@ if [[ -n "$ip" ]]; then
   printf '  Reseau : %s\n\n' "$ip"
 else
   printf '  Reseau : AUCUNE adresse IP -- la remontee de rapport echouera\n'
-  printf '           (cette image ne gere que le reseau filaire)\n\n'
+  printf '           Brancher le cable, ou pour le Wi-Fi :\n'
+  printf '               nmcli dev wifi list\n'
+  printf '               nmcli dev wifi connect <SSID> password <mot_de_passe>\n\n'
 fi
 
 # -e 1,2,7,11 ecarte ram, disquette, loop et lecteur optique. Sans ce filtre,
