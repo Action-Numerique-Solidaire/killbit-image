@@ -104,6 +104,16 @@ jobs:
           echo "$report" | grep -q 'UEFI' \
             || { echo "::error::Entrée El Torito UEFI absente"; exit 1; }
 
+      - name: Vérifier l'empreinte publiée
+        # Le .sha256 est joint à la release : il doit rester vérifiable par un
+        # « sha256sum -c » lancé à côté de l'ISO téléchargée, donc ne contenir
+        # que le nom de fichier nu, sans le chemin de ce runner.
+        run: |
+          cat killbit-live.iso.sha256
+          grep -qE '^[0-9a-f]{64}  killbit-live\.iso$' killbit-live.iso.sha256 \
+            || { echo "::error::le .sha256 n_est pas au format nom nu"; exit 1; }
+          sha256sum -c killbit-live.iso.sha256
+
       - name: Vérifier le contenu de l'image
         # Deux promesses à tenir, et chacune a son garde-fou :
         #   1. ce qui doit y être : killbit, ses outils, l'accueil opérateur et

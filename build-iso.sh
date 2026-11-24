@@ -425,7 +425,11 @@ xorriso -as mkisofs \
   -isohybrid-gpt-basdat \
   -o "$OUTPUT_ISO" "$ISO_STAGE"
 
-sha256sum "$OUTPUT_ISO" | tee "${OUTPUT_ISO}.sha256"
+# Empreinte au nom nu : le fichier doit rester verifiable par
+# « sha256sum -c killbit-live.iso.sha256 » a cote de l'ISO telechargee,
+# donc sans le chemin de la machine de construction.
+( cd "$(dirname "$OUTPUT_ISO")" && sha256sum "$(basename "$OUTPUT_ISO")" ) \
+  | tee "${OUTPUT_ISO}.sha256"
 log "Terminé : $OUTPUT_ISO ($(du -h "$OUTPUT_ISO" | cut -f1))"
 echo "killbit embarqué : sha256 $actual_sha"
 echo "Pour écrire sur une clé USB :"
