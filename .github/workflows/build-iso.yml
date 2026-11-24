@@ -147,7 +147,12 @@ jobs:
           done
 
           echo "--- NetworkManager doit etre actif : killbit appelle nmcli ---"
-          if sudo test -e /mnt/sq/etc/systemd/system/multi-user.target.wants/NetworkManager.service; then
+          # test -L et non -e : le lien d'activation pointe vers
+          # /usr/lib/systemd/system/... en chemin ABSOLU. Dans le squashfs
+          # monte, « test -e » suivrait ce chemin contre la racine du runner,
+          # ou NetworkManager n'est pas installe, et declarerait l'unite
+          # absente. Le piege passe inapercu sur un poste ou NM est installe.
+          if sudo test -L /mnt/sq/etc/systemd/system/multi-user.target.wants/NetworkManager.service; then
             echo "  OK       NetworkManager active au demarrage"
           else
             echo "::error::NetworkManager non active : nmcli echouera"; fail=1
