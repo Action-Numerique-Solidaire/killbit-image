@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Front ncurses (dialog) de l'image « guidee ». L'operateur ne saisit qu'un
 # identifiant de poste ; killbit est ensuite lance avec --yes, donc SANS aucune
-# demande de confirmation de sa part.
+# demande de confirmation de sa part, et ce front n'en ajoute aucune : un seul
+# geste par poste, la saisie de l'identifiant.
 #
-# C'est pour cela que cet ecran en demande une, et une seule : l'effacement est
-# irreversible et plus rien ne l'interrompt apres le dernier « Effacer ». Le
-# recapitulatif montre l'identifiant saisi et les supports qui vont y passer.
+# Reste un decompte : le recapitulatif (identifiant saisi, serveur, supports qui
+# vont y passer) s'affiche DELAI_AVANT_EFFACEMENT secondes puis l'effacement
+# part de lui-meme. Echap pendant ce decompte annule. Aucune touche n'est
+# attendue : un poste demarre par megarde garde une sortie, le passage normal ne
+# coute rien de plus.
 #
 # Avec --aide-seule, affiche l'ecran d'aide et rend la main (alias « aide »).
 set -uo pipefail
@@ -13,6 +16,9 @@ set -uo pipefail
 RELEASE=/etc/killbit-image-release
 LOGDIR=/var/log/killbit
 BACKTITLE="killbit  --  Action Numerique Solidaire"
+# Secondes d'affichage du recapitulatif avant le depart automatique. Mettre 0
+# supprime le decompte : l'effacement part des la validation de l'identifiant.
+DELAI_AVANT_EFFACEMENT=8
 ACCUEIL_TEXTE=/usr/local/sbin/killbit-session.sh
 
 report_url="https://actionnumeriquesolidaire.org"
@@ -35,7 +41,10 @@ disques() { lsblk -d -e 1,2,7,11 -o NAME,SIZE,ROTA,MODEL,SERIAL 2>/dev/null; }
 reseau() {
   local ip
   ip="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2": "$4}' | paste -sd' ' -)"
-  printf '%s' "${ip:-AUCUNE adresse IP, le rapport ne partira pas}"
+  # killbit contacte son serveur avant d'ecrire, et s'arrete en code 1 s'il
+  # ne l'atteint pas : sans reseau, rien n'est efface du tout.
+  [[ -n "$ip" ]] || ip="AUCUNE adresse IP -- killbit refusera d'effacer"
+  printf '%s' "$ip"
 }
 
 aide() {
@@ -45,7 +54,8 @@ Cette image efface les disques d'un poste et remonte un rapport.
 Deroulement :
   1. saisir l'identifiant du poste (etiquette QRcode, ex. R21062200075)
   2. relire le recapitulatif : identifiant, serveur, supports detectes
-  3. confirmer -- l'effacement demarre et ne s'arrete plus
+  3. ne rien faire -- l'effacement part seul apres $DELAI_AVANT_EFFACEMENT secondes
+     et ne s'arrete plus ; Echap pendant le decompte annule
 
 Serveur de remontee : $report_url
 Journaux des passages : $LOGDIR
@@ -53,8 +63,10 @@ Journaux des passages : $LOGDIR
 Un effacement est IRREVERSIBLE : aucune donnee n'est recuperable
 ensuite, y compris par un laboratoire.
 
-Sans adresse IP, brancher le cable reseau. Pour le Wi-Fi, depuis un
-shell :  nmcli dev wifi connect <SSID> password <mot_de_passe>
+Sans adresse IP, rien ne sera efface : killbit contacte son serveur
+avant d'ecrire et s'arrete s'il ne l'atteint pas. Brancher le cable
+reseau. Pour le Wi-Fi, depuis un shell :
+  nmcli dev wifi connect <SSID> password <mot_de_passe>
 
 Pour reprendre la main en ligne de commande, choisir « Shell » dans
 le menu de fin de passage, ou basculer sur une autre console avec
@@ -170,9 +182,13 @@ du poste : le basculer en AHCI, puis redemarrer." 11 70
     continue
   fi
 
-  dlg --title "ATTENTION -- effacement irreversible" \
-    --defaultno --yes-label "Effacer" --no-label "Annuler" \
-    --yesno "\
+  # --pause rend 0 quand le decompte arrive au bout, comme sur « Effacer
+  # maintenant », et non nul sur Echap et « Annuler » : l'effacement part donc
+  # sans intervention, et seul un geste explicite l'empeche.
+  if [[ "$DELAI_AVANT_EFFACEMENT" -gt 0 ]]; then
+    dlg --title "ATTENTION -- effacement irreversible" \
+      --ok-label "Effacer maintenant" --cancel-label "Annuler" \
+      --pause "\
 Poste   : $ID
 Serveur : $report_url
 Reseau  : $(reseau)
@@ -180,10 +196,10 @@ Reseau  : $(reseau)
 Supports qui vont etre EFFACES :
 $(printf '%s\n' "$liste" | sed 's/^/  /')
 
-Cette operation est IRREVERSIBLE et ne demandera plus aucune
-confirmation une fois lancee.
-
-Lancer l'effacement ?" 22 74 || continue
+Cette operation est IRREVERSIBLE. Echap ou « Annuler » l'arrete
+pendant le decompte ; ensuite plus rien ne l'interrompt." 24 74 \
+      "$DELAI_AVANT_EFFACEMENT" || continue
+  fi
 
   effacer "$ID" || true
 

@@ -206,7 +206,7 @@ racine du chroot.
 | `root/.bash_history` | **Généré par le script**, pas présent dans l'overlay : il dérive de `KILLBIT_REPORT_URL`, pour que l'écran d'accueil et l'historique ne puissent pas diverger. Dernière ligne = première flèche vers le haut. |
 | `root/.xinitrc` | Mode navigateur uniquement, et **sans gestionnaire de fenêtres**. Retiré de l'image en mode console, pour que le chemin de démarrage reste sans ambiguïté. |
 | `usr/local/sbin/killbit-session.sh` | Écran d'accueil en texte : identité de l'image, réseau, supports, commande à lancer. Puis un shell interactif. `--aide-seule` pour le réafficher. |
-| `usr/local/sbin/killbit-guide.sh` | Front ncurses (`dialog`) de l'image guidée : saisie de l'identifiant, récapitulatif, `killbit --yes`, journal dans `/var/log/killbit/`. **Retiré du chroot** quand `KILLBIT_FRONT=shell`. |
+| `usr/local/sbin/killbit-guide.sh` | Front ncurses (`dialog`) de l'image guidée : saisie de l'identifiant, récapitulatif en décompte, `killbit --yes`, journal dans `/var/log/killbit/`. **Retiré du chroot** quand `KILLBIT_FRONT=shell`. |
 | `etc/systemd/system/killbit-ready.service` | Émet `KILLBIT-IMAGE-READY` sur la console série. C'est ce que le test d'amorçage attend. |
 | `etc/network/` | Dossier vide, voir le tableau des pièges. |
 
@@ -227,17 +227,27 @@ même script et ne diffèrent que par un paquet, `dialog`, et par la présence d
 | Au démarrage | accueil en texte, puis un shell | front ncurses plein écran |
 | Saisie | l'opérateur tape la commande, pré-remplie dans l'historique | l'identifiant du poste, et rien d'autre |
 | Appel de killbit | sans `--yes` : killbit garde toutes ses confirmations | **avec `--yes`** : killbit ne demande plus rien |
-| Confirmations avant écriture | celles de killbit | **une seule**, le récapitulatif du front |
+| Confirmations avant écriture | celles de killbit | **aucune** : un décompte de 8 s, annulable par `Echap` |
 
 Dans l'image `shell`, **rien ne s'efface tout seul** : `killbit` n'y est appelé
 nulle part avec `--yes`.
 
 Dans l'image `guide`, `--yes` est le but : enchaîner les postes sans répondre à
-des questions. C'est précisément pour cela que le front en pose une, et une
-seule, au récapitulatif — identifiant saisi, serveur, et **liste des disques qui
-vont être effacés**, avec leur taille, modèle et numéro de série. Le bouton
-sélectionné par défaut y est `Annuler`. Après ce « Effacer », plus rien
-n'interrompt l'opération.
+des questions. Le front n'en rajoute donc aucune. La saisie de l'identifiant est
+le dernier geste de l'opérateur ; le récapitulatif qui suit — identifiant saisi,
+serveur, et **liste des disques qui vont être effacés**, avec leur taille, modèle
+et numéro de série — est un `dialog --pause` de `DELAI_AVANT_EFFACEMENT`
+secondes (8), pas une question.
+
+`--pause` rend **0 quand le décompte arrive au bout**, comme sur `OK`, et un
+code non nul sur `Echap` et `Annuler` : l'effacement part donc sans
+intervention, et seul un geste explicite l'empêche. Vérifié, pas supposé :
+expiration → 0, `Echap` au bout de 2 s sur un décompte de 25 → 255 immédiat.
+Mettre `DELAI_AVANT_EFFACEMENT=0` supprime même le décompte.
+
+Ce décompte est le dernier garde-fou de cette image, et il est volontairement
+court : il laisse relire la liste des disques d'un poste démarré par mégarde
+sans coûter un geste par poste à l'atelier.
 
 Le front se retire de son propre chemin dans deux cas : `dialog` absent de
 l'image, ou pas de terminal de contrôle. Il bascule alors sur l'accueil en
@@ -307,8 +317,25 @@ le verdict est automatique **sans OCR** :
    `fr` est bien active ;
 3. il valide et vérifie que **l'écran a changé**, ce qui distingue un front
    vivant d'une image figée ;
-4. il s'arrête là. Le dernier « Effacer » lance un effacement réel : ce test
-   n'en déclenche jamais, même sur disque virtuel.
+4. puis il ne frappe plus rien, et vérifie que **le bleu quitte l'écran de
+   lui-même** : c'est le décompte qui arrive au bout et killbit qui prend la
+   console. Un écran resté bleu signifierait que quelque chose attend encore un
+   opérateur — exactement ce que cette image ne doit plus faire. La machine
+   virtuelle est coupée dès que l'écran a changé.
+
+Ce dernier point laisse killbit démarrer pour de bon, le temps d'une seconde.
+Deux précautions, parce qu'un test ne doit rien casser hors de lui : le seul
+support branché est un fichier creux dans un dossier temporaire, effacé à la
+sortie ; et le réseau de la machine virtuelle est en `restrict=on`, donc elle
+obtient bien une adresse du DHCP interne de QEMU mais ne joint ni l'hôte ni
+l'extérieur — **aucun rapport de poste fictif ne peut atteindre le serveur de
+l'association**.
+
+Cette isolation suffit d'ailleurs à garantir qu'aucun octet n'est écrit :
+killbit contacte son serveur **avant** d'écrire et s'arrête en code 1 s'il ne
+l'atteint pas. C'est aussi pourquoi l'image dit maintenant « killbit REFUSERA
+d'effacer » quand il n'y a pas d'adresse IP, au lieu d'annoncer seulement un
+rapport perdu : sans réseau, un poste passé en atelier repart intact.
 
 Les captures sont déposées en PNG dans le dossier indiqué, y compris quand le
 test échoue — c'est là qu'on veut voir l'écran.
@@ -377,8 +404,9 @@ sur `ubuntu-24.04`.
 - L'image démarre en root avec connexion automatique, sans mot de passe. C'est
   volontaire — un outil d'atelier doit être immédiatement utilisable — mais
   cela suppose un contrôle physique de la machine.
-- **L'image guidée lance `killbit --yes`.** Elle ne pose qu'une question, le
-  récapitulatif, et plus rien ensuite. C'est son intérêt en atelier et son
+- **L'image guidée lance `killbit --yes` sans confirmation.** Elle ne pose
+  qu'une question, l'identifiant du poste ; le décompte de 8 secondes est tout
+  ce qui sépare la saisie de l'écriture. C'est son intérêt en atelier et son
   risque : un identifiant saisi sur le mauvais poste efface le mauvais poste.
   L'image `shell` reste disponible pour qui préfère les confirmations de
   killbit.

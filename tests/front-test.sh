@@ -11,6 +11,12 @@
 # compte donc les pixels bleus, puis on vérifie que l'écran CHANGE après la
 # saisie — c'est ce qui distingue un front vivant d'une image figée.
 #
+# Troisième contrôle, depuis que le front ne demande plus de confirmation : le
+# bleu doit QUITTER l'écran tout seul, sans qu'aucune touche soit frappée. Ce
+# départ est le décompte qui arrive au bout et killbit qui prend la console —
+# le comportement même que demande l'image guidée. La machine virtuelle est
+# alors coupée aussitôt.
+#
 # Usage : tests/front-test.sh <image.iso> [dossier_de_sortie] [timeout_s]
 set -Eeuo pipefail
 
@@ -25,6 +31,9 @@ SEUIL_BLEU="${SEUIL_BLEU:-0.40}"
 # Part de pixels qui doivent différer entre deux captures pour conclure que
 # l'écran a changé.
 SEUIL_DIFF="${SEUIL_DIFF:-0.02}"
+# En dessous de cette part de bleu, dialog a quitté l'écran : killbit écrit en
+# texte sur fond noir.
+SEUIL_PARTI="${SEUIL_PARTI:-0.10}"
 
 [[ -f "$ISO" ]] || { echo "ERREUR : introuvable : $ISO" >&2; exit 1; }
 command -v qemu-system-x86_64 >/dev/null || { echo "ERREUR : qemu-system-x86_64 absent" >&2; exit 1; }
@@ -38,8 +47,16 @@ sock="$workdir/mon.sock"
 
 # Un disque vierge, pour que le front ait quelque chose a proposer d'effacer :
 # sans lui, il affiche « aucun support detecte » et le recapitulatif — l'ecran
-# le plus important a verifier — n'est jamais atteint. Rien ne sera ecrit
-# dessus : le test s'arrete avant la confirmation.
+# le plus important a verifier — n'est jamais atteint.
+#
+# Le decompte du front finit par lancer killbit sur ce fichier, par construction
+# du test : c'est un fichier creux dans un dossier temporaire, seul support
+# branche a la machine virtuelle, efface a la sortie. Et la machine est coupee
+# des que l'ecran a change.
+#
+# En pratique aucun octet n'est ecrit : la machine est isolee (restrict=on) et
+# killbit contacte son serveur AVANT d'ecrire, puis s'arrete en code 1 s'il ne
+# l'atteint pas. Mesure, pas suppose.
 #
 # « truncate » plutot que « qemu-img create » : un fichier creux en format brut
 # suffit, n'occupe rien, et evite d'exiger qemu-utils, absent des runners
@@ -56,7 +73,12 @@ qemu_args=(
   -no-reboot
   # NIC en mode utilisateur : le front affiche l'adresse obtenue, et une image
   # sans réseau du tout ne ressemblerait pas à un poste d'atelier.
-  -nic "user,model=virtio-net-pci"
+  #
+  # « restrict=on » isole cette machine : elle reçoit bien une adresse du DHCP
+  # interne de QEMU, mais ne joint ni l'hôte ni l'extérieur. Indispensable
+  # depuis que le test laisse killbit démarrer : aucun rapport de poste fictif
+  # ne doit atteindre le serveur de l'association.
+  -nic "user,model=virtio-net-pci,restrict=on"
 )
 if [[ -w /dev/kvm ]]; then
   qemu_args+=(-enable-kvm -cpu host)
@@ -220,13 +242,31 @@ done
 [[ -n "$recap_ppm" ]] && analyse png "$recap_ppm" "$OUTDIR/3-recap.png" >/dev/null
 echo "[front-test] apres validation : $part_diff de pixels modifies (seuil $SEUIL_DIFF)"
 
-# On s'arrete avant de confirmer : le dernier « Effacer » lance un effacement
-# reel, et ce test ne doit jamais en declencher un, meme sur disque virtuel.
-hmp "sendkey esc"
+# Plus aucune touche a partir d'ici : le front doit partir tout seul. Le bleu
+# quitte l'ecran quand le decompte arrive au bout et que killbit prend la main.
+# Si l'ecran restait bleu, c'est que quelque chose attend encore un operateur —
+# exactement ce que cette image ne doit plus faire.
+echo "[front-test] attente du depart automatique (aucune touche frappee)"
+parti_ppm=""
+part_reste="1"
+deadline=$(( SECONDS + 90 ))
+while (( SECONDS < deadline )); do
+  parti_ppm="$(capture 4-parti)" || break
+  part_reste="$(analyse bleu "$parti_ppm" | cut -d' ' -f1)"
+  sup "$SEUIL_PARTI" "$part_reste" && break
+  sleep 2
+done
+[[ -n "$parti_ppm" ]] && analyse png "$parti_ppm" "$OUTDIR/4-parti.png" >/dev/null
+echo "[front-test] apres le decompte : $part_reste de surface bleue (seuil < $SEUIL_PARTI)"
+
+# Coupure immediate : killbit vient de demarrer, il n'a aucune raison d'aller
+# plus loin.
+kill "$qemu_pid" 2>/dev/null || true
 
 echo "[front-test] captures dans $OUTDIR"
 rc=0
 sup "$part_bleu" "$SEUIL_BLEU" || { echo "[front-test] ECHEC : pas de front dialog a l'ecran"; rc=1; }
 sup "$part_diff" "$SEUIL_DIFF" || { echo "[front-test] ECHEC : l'ecran n'a pas reagi a la saisie"; rc=1; }
-(( rc == 0 )) && echo "[front-test] OK : front affiche et reactif"
+sup "$SEUIL_PARTI" "$part_reste" || { echo "[front-test] ECHEC : le front attend encore une confirmation"; rc=1; }
+(( rc == 0 )) && echo "[front-test] OK : front affiche, reactif, et effacement lance sans confirmation"
 exit "$rc"

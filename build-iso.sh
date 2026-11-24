@@ -24,8 +24,9 @@ MIRROR="${KILLBIT_MIRROR:-http://deb.debian.org/debian}"
 #   shell  (defaut) : ecran d'accueil en texte, puis un shell. L'operateur tape
 #                     lui-meme la commande, pre-remplie dans l'historique.
 #   guide           : front ncurses (dialog) qui ne demande que l'identifiant du
-#                     poste, puis lance killbit avec --yes. Aucune confirmation
-#                     de killbit, donc une seule dans le front, au recapitulatif.
+#                     poste, puis lance killbit avec --yes. Aucune confirmation,
+#                     ni de killbit ni du front : le recapitulatif n'est qu'un
+#                     decompte de quelques secondes, annulable par Echap.
 KILLBIT_FRONT="${KILLBIT_FRONT:-shell}"
 case "$KILLBIT_FRONT" in
   shell|guide) ;;
@@ -109,6 +110,21 @@ PACKAGES=(
   # d'ou libcpanel-json-xs-perl pour la sortie JSON), sensors -u, upower -i,
   # memtester, nmcli dev wifi list.
   sudo inxi libcpanel-json-xs-perl memtester lm-sensors upower network-manager
+  # Les QUATRE premieres de cette meme liste, longtemps manquantes parce que la
+  # lecture des chaines du binaire avait demarre quatre entrees trop loin :
+  # « g++ » fait trois caracteres, sous le minimum de « strings », et les trois
+  # autres etaient juste avant. Ce sont des dependances de COMPILATION, que
+  # killbit controle pourtant a l'execution.
+  #
+  # Mesure en VM, image hors ligne : killbit liste les quatre comme manquantes,
+  # passe en « Mode --yes actif : installation automatique », l'apt echoue faute
+  # de depot joignable, et il SORT EN CODE 1 — aucun disque efface. L'image
+  # guidee etait donc inutilisable hors ligne, et sur un reseau d'atelier elle
+  # telechargeait 117 Mo de paquets a chaque poste.
+  #
+  # Cout mesure : 89 paquets, 439 Mo installes, 117 Mo de .deb. Lourd pour une
+  # chaine de compilation dont killbit ne se sert pas, mais c'est son critere.
+  build-essential g++ libsodium-dev libcurl4-openssl-dev
   # zstd : sans ce binaire dans le chroot, initramfs-tools avertit « No zstd in
   # /usr/bin:/sbin:/bin, using gzip » et retombe sur gzip, alors que zstd est le
   # réglage par défaut de Debian 13. L'initramfs est alors plus gros et plus lent

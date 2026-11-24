@@ -187,7 +187,12 @@ jobs:
           # base dpkg de l'image : une dependance manquante fait proposer a
           # l'operateur un « sudo apt install » qui ne peut pas aboutir hors
           # ligne. C'est arrive en atelier.
-          for p in curl hdparm nvme-cli inxi util-linux coreutils \
+          # La liste complete fait seize entrees : les quatre premieres sont
+          # des dependances de compilation (build-essential, g++, libsodium-dev,
+          # libcurl4-openssl-dev). Sans elles killbit sort en code 1 sans rien
+          # effacer des que l'apt de secours ne peut pas aboutir. Mesure en VM.
+          for p in build-essential g++ libsodium-dev libcurl4-openssl-dev \
+                   curl hdparm nvme-cli inxi util-linux coreutils \
                    libcpanel-json-xs-perl smartmontools memtester lm-sensors \
                    upower network-manager sudo; do
             st=$(sudo dpkg-query --admindir=/mnt/sq/var/lib/dpkg -W -f='${Status}' "$p" 2>/dev/null || true)
@@ -372,8 +377,9 @@ jobs:
             echo "| \`killbit-live.iso\` | écran d'accueil puis un shell ; la commande d'effacement est pré-remplie dans l'historique, flèche haut pour la rappeler |"
             echo "| \`killbit-live-guide.iso\` | front ncurses qui ne demande que l'identifiant du poste, puis lance killbit avec \`--yes\` |"
             echo
-            echo "L'image guidée ne pose qu'une seule question avant d'effacer :"
-            echo "le récapitulatif. killbit, lui, ne demande plus rien."
+            echo "L'image guidée ne demande **que l'identifiant du poste** : le"
+            echo "récapitulatif reste 8 secondes à l'écran, décompte visible, puis"
+            echo "l'effacement part seul. \`Echap\` pendant le décompte annule."
             echo
             echo '```bash'
             echo 'sudo dd if=killbit-live.iso of=/dev/sdX bs=4M status=progress conv=fsync'

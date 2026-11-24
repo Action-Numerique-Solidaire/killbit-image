@@ -15,7 +15,7 @@ différant d'un seul paquet :
 | Image | Au démarrage | Pour qui |
 |---|---|---|
 | `killbit-live.iso` | écran d'accueil, puis un shell ; la commande d'effacement attend dans l'historique, à une flèche HAUT | bénévole à l'aise en ligne de commande, dépannage |
-| `killbit-live-guide.iso` | front ncurses plein écran qui ne demande **que l'identifiant du poste**, affiche un récapitulatif, puis lance killbit avec `--yes` | atelier, passages en série |
+| `killbit-live-guide.iso` | front ncurses plein écran qui ne demande **que l'identifiant du poste**, puis lance killbit avec `--yes` sans attendre de confirmation | atelier, passages en série |
 
 ## Documentation
 
@@ -45,13 +45,14 @@ sha256sum -c killbit-live.iso.sha256
 ## Au démarrage — image guidée
 
 Le poste démarre directement sur un front en texte plein écran. L'opérateur
-saisit l'identifiant qui figure sur l'étiquette QRcode, relit un récapitulatif —
-identifiant, serveur de remontée, adresse réseau, et **la liste des disques qui
-vont être effacés** — puis confirme.
+saisit l'identifiant qui figure sur l'étiquette QRcode, et c'est **le seul geste
+demandé** : le front affiche alors un récapitulatif — identifiant, serveur de
+remontée, adresse réseau, et **la liste des disques qui vont être effacés** —
+pendant **8 secondes**, décompte à l'écran, puis l'effacement part de lui-même.
 
-C'est la **seule** confirmation : killbit est appelé avec `--yes` et ne demande
-plus rien, méthode d'effacement comprise (*Purge* par défaut). Le bouton
-sélectionné d'office au récapitulatif est `Annuler`. La sortie de killbit est
+Aucune confirmation n'est attendue : killbit est appelé avec `--yes` et ne
+demande plus rien, méthode d'effacement comprise (*Purge* par défaut). `Echap`
+pendant le décompte annule ; `Entrée` le raccourcit. La sortie de killbit est
 journalisée dans `/var/log/killbit/`.
 
 Si aucun disque n'est visible, le front le dit et ne propose pas d'effacer.
@@ -140,6 +141,7 @@ embarqués.
 
 | Paquet | Ce que killbit en fait |
 |---|---|
+| `build-essential`, `g++`, `libsodium-dev`, `libcurl4-openssl-dev` | **rien à l'exécution** : ce sont ses dépendances de compilation, qu'il contrôle quand même au démarrage. Sans elles il sort en code 1 sans rien effacer |
 | `curl`, `hdparm`, `nvme-cli`, `util-linux`, `coreutils`, `smartmontools` | effacement et interrogation des supports |
 | `inxi` + `libcpanel-json-xs-perl` | `inxi … --output json` : inventaire matériel du rapport |
 | `lm-sensors` | `sensors -u` |
@@ -152,6 +154,14 @@ C'est aussi pourquoi **NetworkManager est le gestionnaire réseau de l'image** e
 non `systemd-networkd` : deux gestionnaires sur les mêmes interfaces se gênent,
 et `nmcli` a besoin du sien. `systemd-resolved` reste en place pour le DNS,
 combinaison que NetworkManager utilise d'office.
+
+Les quatre premières ont manqué jusqu'au 24 novembre 2026 : la liste avait été
+lue dans les chaînes du binaire à partir de sa cinquième entrée. Conséquence
+mesurée en VM, image hors ligne : killbit passe en installation automatique
+sous `--yes`, l'`apt` échoue faute de dépôt joignable, et **il sort en code 1
+sans effacer un seul disque**. Sur un réseau d'atelier, il téléchargeait 117 Mo
+à chaque poste. Elles coûtent 439 Mo installés — une chaîne de compilation dont
+killbit ne se sert pas — mais c'est son critère, pas le nôtre.
 
 La CI applique le même critère que killbit sur chacun de ces paquets : une
 dépendance qui disparaîtrait ferait échouer la construction, pas l'atelier.
@@ -220,18 +230,25 @@ debootstrap sans snapd. Debian fournit de vrais `.deb`.
 
 - **Secure Boot doit être désactivé** dans le firmware : le chargeur UEFI n'est
   pas signé. Le support de `shim-signed` est possible mais non implémenté.
-- **L'image guidée lance `killbit --yes`.** Elle ne pose qu'une question, le
-  récapitulatif, et plus rien ensuite. C'est son intérêt en atelier et son
-  risque : un identifiant saisi sur le mauvais poste efface le mauvais poste.
-  L'image classique reste publiée pour qui préfère les confirmations de killbit.
+- **L'image guidée lance `killbit --yes` sans confirmation.** Elle ne pose
+  qu'une question, l'identifiant du poste ; le récapitulatif n'est qu'un
+  décompte de 8 secondes, annulable par `Echap`. C'est son intérêt en atelier et
+  son risque : un identifiant saisi sur le mauvais poste efface le mauvais
+  poste, et il n'y a plus de garde-fou à part ce décompte. L'image classique
+  reste publiée pour qui préfère les confirmations de killbit.
 - **Les micrologiciels Wi-Fi embarqués couvrent Intel, Atheros, Broadcom,
   Marvell et Realtek.** Une carte hors de ces familles sera rapportée comme non
   opérationnelle par killbit. `firmware-ti-connectivity` n'est pas embarqué :
   wl12xx équipe des cartes embarquées, pas les portables d'un parc de réemploi.
 - La connexion Wi-Fi elle-même n'est pas automatisée : l'image obtient son
   adresse par DHCP sur le réseau filaire. Pour le Wi-Fi, `nmcli dev wifi connect
-  <SSID> password <mot_de_passe>` depuis un shell. L'effacement local, lui,
-  fonctionne sans réseau.
+  <SSID> password <mot_de_passe>` depuis un shell.
+- **Sans réseau, killbit n'efface rien.** Il contacte son serveur avant
+  d'écrire : s'il ne l'atteint pas, il s'arrête sur « Impossible de contacter
+  le serveur » et rend le code 1, sans toucher aux disques. Mesuré en VM
+  isolée. Ce n'est pas un choix de l'image, c'est le comportement du binaire —
+  mais l'écran d'accueil et le front le disent désormais au lieu d'annoncer
+  seulement un rapport perdu.
 - L'URL par défaut du binaire pointe sur `refs/heads/main`, donc il peut changer
   sans préavis. Renseigner `KILLBIT_SHA256` pour figer une version.
 
@@ -255,10 +272,13 @@ le temps d'une seule. Avant publication, le workflow vérifie que :
   Sans cela, elles pourraient être livrées identiques sans que rien n'alerte ;
 - les images **démarrent réellement**, en BIOS et en UEFI, dans QEMU, les deux
   amorçages menés en parallèle ;
-- le **front ncurses s'affiche et réagit** : le test attend que l'écran devienne
-  bleu — `dialog` peint le fond, une console en texte jamais — tape un
-  identifiant au clavier du poste via le moniteur QEMU, et vérifie que l'écran
-  change. Il s'arrête avant la confirmation : aucun effacement n'est déclenché.
+- le **front ncurses s'affiche, réagit, et part tout seul** : le test attend que
+  l'écran devienne bleu — `dialog` peint le fond, une console en texte jamais —
+  tape un identifiant au clavier du poste via le moniteur QEMU, vérifie que
+  l'écran change, puis **ne frappe plus rien** et vérifie que le bleu quitte
+  l'écran de lui-même : c'est le décompte qui arrive au bout. La machine
+  virtuelle est coupée aussitôt, isolée du réseau (`restrict=on`) et n'a qu'un
+  fichier creux temporaire comme disque.
 
 Ces garde-fous existent parce qu'une ISO peut se construire sans erreur tout en
 étant inutilisable : amorçable en BIOS seul, amputée d'une dépendance, ou prise

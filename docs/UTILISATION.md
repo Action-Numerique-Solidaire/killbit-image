@@ -13,15 +13,17 @@ s'affiche au démarrage.
 | Image | Au démarrage | Pour qui |
 |---|---|---|
 | `killbit-live.iso` | écran d'accueil, puis un shell. La commande d'effacement est pré-remplie dans l'historique : flèche HAUT pour la rappeler, puis remplacer l'identifiant. | bénévole à l'aise en ligne de commande, ou dépannage |
-| `killbit-live-guide.iso` | front en texte plein écran qui ne demande **que l'identifiant du poste**, affiche un récapitulatif, puis lance killbit sans plus aucune question. | atelier, passages en série, bénévole occasionnel |
+| `killbit-live-guide.iso` | front en texte plein écran qui ne demande **que l'identifiant du poste** : l'effacement part ensuite seul, après un décompte de 8 secondes. | atelier, passages en série, bénévole occasionnel |
 
 Les deux effacent de la même façon : c'est le même binaire killbit, avec les
 mêmes options. La différence est l'écran, pas le traitement.
 
-> **Une seule confirmation dans l'image guidée.** Elle lance killbit avec
-> `--yes`, donc killbit ne demande plus rien. La seule question posée est le
-> récapitulatif du front : identifiant, serveur, liste des disques qui vont
-> être effacés. Après ce « Effacer », plus rien ne s'arrête.
+> **Aucune confirmation dans l'image guidée.** Elle lance killbit avec
+> `--yes`, donc killbit ne demande plus rien, et le front n'ajoute pas de
+> question : la saisie de l'identifiant est le dernier geste. Un récapitulatif
+> — identifiant, serveur, liste des disques qui vont être effacés — reste
+> affiché **8 secondes** avec un décompte, puis l'effacement démarre seul.
+> `Echap` pendant ces 8 secondes est la seule façon de l'arrêter.
 
 ## 2. Récupérer l'image
 
@@ -162,13 +164,16 @@ qu'après l'effacement.
 
 Le bouton `Aide` réaffiche l'écran d'explication.
 
-**2. Récapitulatif.** Avant d'effacer, le front affiche l'identifiant saisi, le
-serveur de remontée, l'adresse réseau obtenue et **la liste des disques qui vont
-être effacés**, avec taille, modèle et numéro de série. Relisez cette liste.
+**2. Récapitulatif et décompte.** Le front affiche alors l'identifiant saisi,
+le serveur de remontée, l'adresse réseau obtenue et **la liste des disques qui
+vont être effacés**, avec taille, modèle et numéro de série, et un décompte de
+**8 secondes**. Relisez cette liste pendant qu'il tourne.
 
-> C'est la **seule** confirmation. killbit est lancé avec `--yes` : il ne
-> redemandera rien, ni pour la méthode d'effacement — *Purge* par défaut — ni
-> avant d'écrire. Le bouton sélectionné par défaut est `Annuler`.
+> **Il n'y a rien à confirmer.** À la fin du décompte, l'effacement part de
+> lui-même. `Echap` ou `Annuler` l'arrête — c'est la dernière occasion.
+> `Entrée` (`Effacer maintenant`) n'attend pas la fin du décompte. killbit est
+> lancé avec `--yes` : il ne redemandera rien, ni pour la méthode d'effacement
+> — *Purge* par défaut — ni avant d'écrire.
 
 **3. Effacement.** L'écran passe en texte brut : c'est killbit qui parle. Sa
 sortie est journalisée dans `/var/log/killbit/<identifiant>-<date>.log`.
@@ -189,10 +194,12 @@ basculer en AHCI.
 |---|---|
 | La clé n'apparaît pas au menu de démarrage | Secure Boot actif, ou clé écrite sur une partition au lieu du disque entier |
 | L'écran reste noir après le choix de la clé | Matériel très ancien : essayez le mode BIOS hérité (CSM) dans le firmware |
-| `AUCUNE adresse IP` | Câble Ethernet débranché, ou pas de DHCP. Pour le Wi-Fi : `nmcli dev wifi connect <SSID> password <mot_de_passe>` depuis un shell |
+| `AUCUNE adresse IP` | Câble Ethernet débranché, ou pas de DHCP. Pour le Wi-Fi : `nmcli dev wifi connect <SSID> password <mot_de_passe>` depuis un shell. **Tant qu'il n'y a pas de réseau, killbit refuse d'effacer** |
+| `Impossible de contacter le serveur` | killbit joint son serveur avant d'écrire. Rien n'a été effacé : rétablissez le réseau et recommencez le poste |
 | Un disque n'apparaît pas dans la liste | Contrôleur en mode RAID dans le firmware : basculez-le en AHCI |
 | killbit refuse d'effacer un disque | Lisez le message : un disque gelé par le firmware (`frozen`) demande un cycle de veille/réveil |
 | killbit rapporte un Wi-Fi non opérationnel | Si le poste est un portable dont le Wi-Fi fonctionne, signalez-le : les micrologiciels Wi-Fi sont embarqués depuis la version `v0.2.0`, et un rapport faux sur ce point est un défaut de l'image |
+| L'effacement est parti alors que vous relisiez l'écran | Le décompte de 8 secondes ne s'interrompt que par `Echap`. Les disques du poste sont perdus ; le rapport, lui, est juste si l'identifiant était bon |
 
 Pour un diagnostic plus poussé, les autres consoles texte restent accessibles
 avec `Ctrl+Alt+F2` à `F6`, et tous les outils habituels sont présents :

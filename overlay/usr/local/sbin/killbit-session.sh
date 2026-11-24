@@ -27,7 +27,11 @@ ip="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2": "$4}' | pas
 if [[ -n "$ip" ]]; then
   printf '  Reseau : %s\n\n' "$ip"
 else
-  printf '  Reseau : AUCUNE adresse IP -- la remontee de rapport echouera\n'
+  # Mesure en VM : sans serveur joignable, killbit s'arrete sur « Impossible
+  # de contacter le serveur » et rend le code 1 AVANT d'ecrire quoi que ce
+  # soit. Pas de reseau, pas d'effacement : le dire ici evite de decouvrir a
+  # l'atelier qu'un poste traite n'a rien ete efface.
+  printf '  Reseau : AUCUNE adresse IP -- killbit REFUSERA d_effacer\n'
   printf '           Brancher le cable, ou pour le Wi-Fi :\n'
   printf '               nmcli dev wifi list\n'
   printf '               nmcli dev wifi connect <SSID> password <mot_de_passe>\n\n'
