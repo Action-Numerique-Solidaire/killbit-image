@@ -111,11 +111,13 @@ jobs:
           KILLBIT_URL: ${{ inputs.killbit_url || env.KILLBIT_URL_DEFAUT }}
           KILLBIT_SHA256: ${{ inputs.killbit_sha256 || '' }}
           KILLBIT_WITH_BROWSER: ${{ inputs.with_browser || '0' }}
-          # PAS « inputs.with_wifi || '1' » : GitHub convertit les operandes de
-          # « || » en nombre, la chaine '0' y est donc fausse et un with_wifi=0
-          # explicite serait silencieusement remplace par 1. Le piege ne se voit
-          # pas sur with_browser, dont le repli vaut justement '0'.
-          KILLBIT_WITH_WIFI: ${{ inputs.with_wifi == '0' && '0' || '1' }}
+          # « || » suffit, et « inputs.with_wifi == '0' » serait un piege : sur un
+          # push le contexte inputs est absent, GitHub compare alors null a '0'
+          # en les ramenant tous deux au nombre 0, l'egalite est VRAIE, et toutes
+          # les images sortaient sans Wi-Fi. Mesure sur la CI, pas supposition.
+          # Pour « || », une chaine non vide est vraie, '0' comprise : un
+          # with_wifi=0 explicite est donc bien respecte.
+          KILLBIT_WITH_WIFI: ${{ inputs.with_wifi || '1' }}
           KILLBIT_REPORT_URL: ${{ inputs.report_url || env.REPORT_URL_DEFAUT }}
           KILLBIT_FRONT: ${{ matrix.front }}
         run: |
