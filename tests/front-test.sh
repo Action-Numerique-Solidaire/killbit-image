@@ -29,7 +29,6 @@ SEUIL_DIFF="${SEUIL_DIFF:-0.02}"
 [[ -f "$ISO" ]] || { echo "ERREUR : introuvable : $ISO" >&2; exit 1; }
 command -v qemu-system-x86_64 >/dev/null || { echo "ERREUR : qemu-system-x86_64 absent" >&2; exit 1; }
 command -v socat >/dev/null || { echo "ERREUR : socat absent" >&2; exit 1; }
-command -v qemu-img >/dev/null || { echo "ERREUR : qemu-img absent" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "ERREUR : python3 absent" >&2; exit 1; }
 
 mkdir -p "$OUTDIR"
@@ -41,12 +40,16 @@ sock="$workdir/mon.sock"
 # sans lui, il affiche « aucun support detecte » et le recapitulatif — l'ecran
 # le plus important a verifier — n'est jamais atteint. Rien ne sera ecrit
 # dessus : le test s'arrete avant la confirmation.
-qemu-img create -f qcow2 "$workdir/disque.qcow2" 8G >/dev/null
+#
+# « truncate » plutot que « qemu-img create » : un fichier creux en format brut
+# suffit, n'occupe rien, et evite d'exiger qemu-utils, absent des runners
+# GitHub, qui n'installent que qemu-system-x86.
+truncate -s 8G "$workdir/disque.img"
 
 qemu_args=(
   -m 2048 -smp 2
   -cdrom "$ISO"
-  -drive "file=$workdir/disque.qcow2,if=virtio,format=qcow2"
+  -drive "file=$workdir/disque.img,if=virtio,format=raw"
   -display none
   -serial "file:$log"
   -monitor "unix:$sock,server,nowait"
@@ -184,7 +187,7 @@ echo "[front-test] marqueur vu : $(grep -ha "$MARKER" "$log" | head -1)"
 # perdu a chaque execution.
 saisie_ppm=""
 part_bleu="0"
-deadline=$(( SECONDS + 180 ))
+deadline=$(( SECONDS + 300 ))
 while (( SECONDS < deadline )); do
   saisie_ppm="$(capture 1-saisie)" || break
   part_bleu="$(analyse bleu "$saisie_ppm" | cut -d' ' -f1)"
@@ -202,10 +205,19 @@ frappe_ppm="$(capture 2-frappe)"
 analyse png "$frappe_ppm" "$OUTDIR/2-frappe.png" >/dev/null
 
 hmp "sendkey ret"
-sleep 3
-recap_ppm="$(capture 3-recap)"
-analyse png "$recap_ppm" "$OUTDIR/3-recap.png" >/dev/null
-part_diff="$(analyse diff "$saisie_ppm" "$recap_ppm" | cut -d' ' -f1)"
+# Meme raison que plus haut : on attend que l'ecran change au lieu de dormir un
+# temps fixe. Sous emulation, dessiner le recapitulatif prend bien plus de
+# temps que sur une machine avec KVM.
+recap_ppm=""
+part_diff="0"
+deadline=$(( SECONDS + 120 ))
+while (( SECONDS < deadline )); do
+  recap_ppm="$(capture 3-recap)" || break
+  part_diff="$(analyse diff "$saisie_ppm" "$recap_ppm" | cut -d' ' -f1)"
+  sup "$part_diff" "$SEUIL_DIFF" && break
+  sleep 5
+done
+[[ -n "$recap_ppm" ]] && analyse png "$recap_ppm" "$OUTDIR/3-recap.png" >/dev/null
 echo "[front-test] apres validation : $part_diff de pixels modifies (seuil $SEUIL_DIFF)"
 
 # On s'arrete avant de confirmer : le dernier « Effacer » lance un effacement
