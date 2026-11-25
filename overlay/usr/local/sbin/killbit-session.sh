@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Accueil opérateur, en console. N'exécute AUCUN effacement : killbit n'est
-# jamais appelé avec --yes, l'opérateur tape lui-même la commande.
+# Côté ligne de commande de l'image : l'écran qu'on obtient en quittant le
+# front guidé (Echap), et le filet si dialog manque. N'exécute AUCUN
+# effacement — killbit n'est jamais appelé avec --yes ici, l'opérateur tape
+# lui-même la commande et répond aux confirmations de killbit.
+#
+# Pour revenir au front guidé : la commande « guide ».
 #
 # Avec --aide-seule, affiche l'écran et rend la main (alias « aide » du shell).
 set -uo pipefail
@@ -65,6 +69,7 @@ printf '  Autres commandes :\n'
 printf '      killbit --check    verifie sans rien effacer\n'
 printf '      killbit --help     liste les options\n'
 printf '      aide               reaffiche cet ecran\n'
+printf '      guide              revient au front guide (une seule question)\n'
 printf '  ----------------------------------------------------------------\n\n'
 printf '  ATTENTION : un effacement est IRREVERSIBLE.\n\n'
 

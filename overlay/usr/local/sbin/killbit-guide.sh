@@ -20,6 +20,11 @@ BACKTITLE="killbit  --  Action Numerique Solidaire"
 # supprime le decompte : l'effacement part des la validation de l'identifiant.
 DELAI_AVANT_EFFACEMENT=8
 ACCUEIL_TEXTE=/usr/local/sbin/killbit-session.sh
+# Rappel affiche dans la bordure basse de chaque boite de dialogue. Ctrl+Alt+F2
+# bascule sur une console deja connectee en root : c'est la seule sortie qui
+# fonctionne aussi pendant que killbit ecrit, puisqu'elle ne passe pas par
+# dialog. « guide » y ramene ici.
+RAPPEL_SORTIE="Ctrl+Alt+F2 : terminal (revenir : guide)"
 
 report_url="https://actionnumeriquesolidaire.org"
 if [[ -r "$RELEASE" ]]; then
@@ -31,7 +36,13 @@ fi
 # la sortie d'ERREUR. Appele dans une substitution de commande, il dessinerait
 # donc dans le tuyau de capture au lieu de l'ecran. Ce wrapper inverse les deux :
 # interface sur le terminal, resultat sur la sortie standard, capturable.
-dlg() { dialog --backtitle "$BACKTITLE" "$@" 3>&1 1>/dev/tty 2>&3 3>&-; }
+# --hline ecrit dans la bordure basse de chaque boite : la sortie de secours
+# est donc rappelee sur tous les ecrans, y compris pendant le decompte, et pas
+# seulement dans l'aide que personne n'ouvre.
+dlg() {
+  dialog --backtitle "$BACKTITLE" --hline "$RAPPEL_SORTIE" "$@" \
+    3>&1 1>/dev/tty 2>&3 3>&-
+}
 
 # -e 1,2,7,11 ecarte ram, disquette, loop et lecteur optique : sans ce filtre le
 # squashfs de l'image live (loop0) et le media de demarrage (sr0) apparaissent
@@ -47,30 +58,31 @@ reseau() {
   printf '%s' "$ip"
 }
 
+# La console physique fait 25 lignes, dont une prise par le backtitle : une
+# boite plus haute que 24 ne tient pas a l'ecran. L'aide est donc serree, et
+# le reste a l'ecrit (docs/UTILISATION.md).
 aide() {
   dlg --title "Aide" --msgbox "\
 Cette image efface les disques d'un poste et remonte un rapport.
 
 Deroulement :
-  1. saisir l'identifiant du poste (etiquette QRcode, ex. R21062200075)
-  2. relire le recapitulatif : identifiant, serveur, supports detectes
-  3. ne rien faire -- l'effacement part seul apres $DELAI_AVANT_EFFACEMENT secondes
-     et ne s'arrete plus ; Echap pendant le decompte annule
+  1. saisir l'identifiant (etiquette QRcode, ex. R21062200075)
+  2. relire le recapitulatif : identifiant, serveur, supports
+  3. ne rien faire : l'effacement part seul apres $DELAI_AVANT_EFFACEMENT secondes
+     et ne s'arrete plus. Echap pendant le decompte annule.
 
-Serveur de remontee : $report_url
-Journaux des passages : $LOGDIR
+Un effacement est IRREVERSIBLE, y compris pour un laboratoire.
 
-Un effacement est IRREVERSIBLE : aucune donnee n'est recuperable
-ensuite, y compris par un laboratoire.
-
-Sans adresse IP, rien ne sera efface : killbit contacte son serveur
-avant d'ecrire et s'arrete s'il ne l'atteint pas. Brancher le cable
-reseau. Pour le Wi-Fi, depuis un shell :
+Sans adresse IP, rien ne sera efface : killbit contacte son
+serveur avant d'ecrire. Brancher le cable, ou en Wi-Fi :
   nmcli dev wifi connect <SSID> password <mot_de_passe>
 
-Pour reprendre la main en ligne de commande, choisir « Shell » dans
-le menu de fin de passage, ou basculer sur une autre console avec
-Ctrl+Alt+F2." 25 72
+Terminal : Ctrl+Alt+F2, deja connecte en root, a tout moment,
+meme pendant un effacement. Retour ici : Ctrl+Alt+F1, ou la
+commande « guide ». Sinon Echap, ou « Shell » en fin de passage.
+
+Serveur : $report_url
+Journaux : $LOGDIR" 24 70
 }
 
 # Sorties de secours. Une image guidee qui demarre sur rien serait un poste

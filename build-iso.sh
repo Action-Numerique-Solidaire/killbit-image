@@ -20,23 +20,19 @@ CHROOT="$WORK_ROOT/chroot"
 ISO_STAGE="$WORK_ROOT/iso"
 DISTRO="${KILLBIT_DISTRO:-trixie}"
 MIRROR="${KILLBIT_MIRROR:-http://deb.debian.org/debian}"
-# Front de l'operateur sur tty1. Deux valeurs :
-#   shell  (defaut) : ecran d'accueil en texte, puis un shell. L'operateur tape
-#                     lui-meme la commande, pre-remplie dans l'historique.
-#   guide           : front ncurses (dialog) qui ne demande que l'identifiant du
-#                     poste, puis lance killbit avec --yes. Aucune confirmation,
-#                     ni de killbit ni du front : le recapitulatif n'est qu'un
-#                     decompte de quelques secondes, annulable par Echap.
-KILLBIT_FRONT="${KILLBIT_FRONT:-shell}"
-case "$KILLBIT_FRONT" in
-  shell|guide) ;;
-  *) printf 'ERREUR : KILLBIT_FRONT doit valoir shell ou guide (recu : %s)\n' \
-       "$KILLBIT_FRONT" >&2; exit 1 ;;
-esac
-# Les deux images coexistent dans la meme release : elles ne peuvent pas porter
-# le meme nom de fichier par defaut.
+# Une seule image, un seul front : le front ncurses (dialog) qui ne demande que
+# l'identifiant du poste, puis lance killbit avec --yes. Aucune confirmation, ni
+# de killbit ni du front : le recapitulatif n'est qu'un decompte de quelques
+# secondes, annulable par Echap.
+#
+# Il y a eu deux images jusqu'a la v0.2.0, l'une guidee et l'autre rendant
+# simplement un shell. Elles ne differaient que par ce qui s'executait sur
+# tty1, pour deux ISO a telecharger, deux constructions a tester et une
+# question de plus a l'atelier. Le shell n'a pas disparu pour autant : il
+# reste accessible DANS cette image, par Ctrl+Alt+F2 (console deja connectee
+# en root), par Echap sur l'ecran de saisie, et par « Shell » en fin de
+# passage. Voir killbit-guide.sh et le bloc des consoles de secours.
 DEFAULT_ISO_NAME="killbit-live.iso"
-[[ "$KILLBIT_FRONT" == "guide" ]] && DEFAULT_ISO_NAME="killbit-live-guide.iso"
 OUTPUT_ISO="${1:-$WORK_ROOT/$DEFAULT_ISO_NAME}"
 VOLID="KILLBIT"
 
@@ -74,7 +70,20 @@ KILLBIT_KEYMAP="${KILLBIT_KEYMAP:-fr}"
 # pour quelques Mo de plus. Le noyau Debian 13 déclare CONFIG_SQUASHFS_ZSTD=y,
 # donc l'image reste montable (vérifié dans /boot/config-*).
 SQUASHFS_COMP="${KILLBIT_SQUASHFS_COMP:-zstd}"
-SQUASHFS_LEVEL="${KILLBIT_SQUASHFS_LEVEL:-19}"
+SQUASHFS_LEVEL="${KILLBIT_SQUASHFS_LEVEL:-22}"
+# Taille de bloc du squashfs. Le defaut de mksquashfs est 128 Kio ; un bloc plus
+# grand donne au compresseur une fenetre plus large, donc une image plus petite.
+#
+# Mesure sur ce chroot, meme contenu a chaque fois :
+#   zstd 19, 128 Kio   295 067 648 octets   59 s
+#   zstd 22, 128 Kio   295 051 264 octets   74 s
+#   zstd 22, 1 Mio     276 103 168 octets   57 s   <- retenu
+#   xz,      1 Mio     261 079 040 octets   50 s
+# Le NIVEAU ne change rien (16 Kio entre 19 et 22) ; le BLOC reprend 18 Mo, et
+# sans coûter de temps : il y a moins de blocs a compresser. xz reprendrait
+# encore 14 Mo mais decompresse plusieurs fois plus lentement, a chaque
+# demarrage de chaque poste — c'est la raison du choix de zstd, inchangee.
+SQUASHFS_BLOCK="${KILLBIT_SQUASHFS_BLOCK:-1M}"
 
 # Prérequis déduits du binaire, pas devinés :
 #   readelf -d : libcurl.so.4, libsodium.so.23, libstdc++.so.6, libgcc_s.so.1
@@ -110,21 +119,14 @@ PACKAGES=(
   # d'ou libcpanel-json-xs-perl pour la sortie JSON), sensors -u, upower -i,
   # memtester, nmcli dev wifi list.
   sudo inxi libcpanel-json-xs-perl memtester lm-sensors upower network-manager
-  # Les QUATRE premieres de cette meme liste, longtemps manquantes parce que la
-  # lecture des chaines du binaire avait demarre quatre entrees trop loin :
-  # « g++ » fait trois caracteres, sous le minimum de « strings », et les trois
-  # autres etaient juste avant. Ce sont des dependances de COMPILATION, que
-  # killbit controle pourtant a l'execution.
+  # Les quatre dependances de COMPILATION de cette meme liste (build-essential,
+  # g++, libsodium-dev, libcurl4-openssl-dev) ne sont pas ici : voir
+  # KILLBIT_STUB_BUILD_DEPS plus bas.
   #
-  # Mesure en VM, image hors ligne : killbit liste les quatre comme manquantes,
-  # passe en « Mode --yes actif : installation automatique », l'apt echoue faute
-  # de depot joignable, et il SORT EN CODE 1 — aucun disque efface. L'image
-  # guidee etait donc inutilisable hors ligne, et sur un reseau d'atelier elle
-  # telechargeait 117 Mo de paquets a chaque poste.
-  #
-  # Cout mesure : 89 paquets, 439 Mo installes, 117 Mo de .deb. Lourd pour une
-  # chaine de compilation dont killbit ne se sert pas, mais c'est son critere.
-  build-essential g++ libsodium-dev libcurl4-openssl-dev
+  # front de l'operateur. dialog plutot que whiptail parce qu'il s'appuie sur
+  # libncursesw6, deja tiree par nano, la ou whiptail ajouterait libnewt et
+  # libslang pour le meme service.
+  dialog
   # zstd : sans ce binaire dans le chroot, initramfs-tools avertit « No zstd in
   # /usr/bin:/sbin:/bin, using gzip » et retombe sur gzip, alors que zstd est le
   # réglage par défaut de Debian 13. L'initramfs est alors plus gros et plus lent
@@ -166,11 +168,29 @@ if [[ "$KILLBIT_WITH_WIFI" == "1" ]]; then
   )
 fi
 
-# Mode guide : le front ncurses. dialog plutot que whiptail parce qu'il
-# s'appuie sur libncursesw6, deja tiree par nano, la ou whiptail ajouterait
-# libnewt et libslang pour le meme service.
-if [[ "$KILLBIT_FRONT" == "guide" ]]; then
-  PACKAGES+=(dialog)
+# Dependances de COMPILATION exigees par killbit. Le binaire porte une liste
+# REQUIRED_PACKAGES de seize entrees et la controle au demarrage avec
+# « dpkg-query -W -f='${Status}' <paquet> », en comparant a « install ok
+# installed ». Quatre de ces entrees sont build-essential, g++, libsodium-dev
+# et libcurl4-openssl-dev. Sous --yes, une seule manquante le fait tenter un
+# « apt install » automatique et, s'il echoue, SORTIR EN CODE 1 sans effacer
+# un seul disque. Elles ne sont donc pas optionnelles.
+#
+# Mais killbit ne compile rien : c'est un binaire deja lie. Verifie dans ses
+# chaines plutot que suppose — « g++ » n'y figure qu'une fois, dans la liste
+# elle-meme, et « gcc » nulle part ailleurs que dans .gcc_except_table ; aucun
+# appel a un compilateur, a make ou a un en-tete. Sa bibliotheque sodium est
+# deja la, en version d'execution (libsodium23).
+#
+# Les installer pour de vrai coute 89 paquets, 439 Mo installes et 88 Mo
+# d'ISO, pour une chaine de compilation que rien n'appelle jamais. On satisfait
+# donc son critere exactement : quatre paquets dpkg VIDES, qui portent ces noms
+# et rendent « install ok installed ». Mettre KILLBIT_STUB_BUILD_DEPS=0
+# reembarque la vraie chaine, le jour ou killbit compilerait quelque chose.
+KILLBIT_STUB_BUILD_DEPS="${KILLBIT_STUB_BUILD_DEPS:-1}"
+BUILD_DEPS_KILLBIT=(build-essential g++ libsodium-dev libcurl4-openssl-dev)
+if [[ "$KILLBIT_STUB_BUILD_DEPS" != "1" ]]; then
+  PACKAGES+=("${BUILD_DEPS_KILLBIT[@]}")
 fi
 
 # Mode navigateur : X minimal et firefox, sans gestionnaire de fenêtres.
@@ -301,6 +321,48 @@ log "Installation des paquets (${#PACKAGES[@]} paquets, sans recommandations)"
 # le clavier et la souris ne fonctionneraient pas sous X.
 in_chroot apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 
+# Paquets vides pour les dependances de compilation de killbit (voir le bloc
+# KILLBIT_STUB_BUILD_DEPS). dpkg-deb construit un .deb sans aucun fichier : la
+# base dpkg le declare installe, « dpkg-query -W -f='${Status}' » rend
+# « install ok installed », et rien n'est ajoute a l'image. La description dit
+# ce qu'ils sont : personne ne doit decouvrir en atelier qu'un g++ de l'image
+# ne compile pas.
+if [[ "$KILLBIT_STUB_BUILD_DEPS" == "1" ]]; then
+  log "Paquets vides pour les dependances de compilation (${#BUILD_DEPS_KILLBIT[@]})"
+  # shellcheck disable=SC2016  # quotes simples voulues : ce script s'evalue
+  # dans le chroot. $p vient de son propre « for », et le -f='${Status}' doit
+  # arriver a dpkg-query tel quel, comme killbit l'ecrit.
+  in_chroot /bin/bash -c '
+    set -Eeuo pipefail
+    rm -rf /tmp/stub && mkdir -p /tmp/stub
+    for p in "$@"; do
+      mkdir -p "/tmp/stub/$p/DEBIAN"
+      cat > "/tmp/stub/$p/DEBIAN/control" <<CTRL
+Package: $p
+Version: 0+killbit-image1
+Architecture: all
+Maintainer: Action Numerique Solidaire <contact@actionnumeriquesolidaire.org>
+Section: metapackages
+Priority: optional
+Description: paquet VIDE, present pour le controle de dependances de killbit
+ killbit verifie la presence de $p avec dpkg-query avant d_effacer, et
+ s_arrete sans rien effacer si le paquet manque. Il ne s_en sert jamais : le
+ binaire est deja compile. Ce paquet ne contient donc AUCUN fichier, et
+ n_apporte pas la fonction du vrai $p. Pour construire une image avec la
+ vraie chaine de compilation : KILLBIT_STUB_BUILD_DEPS=0 ./build-iso.sh
+CTRL
+      dpkg-deb --build --root-owner-group "/tmp/stub/$p" "/tmp/stub/$p.deb" >/dev/null
+    done
+    dpkg -i /tmp/stub/*.deb
+    for p in "$@"; do
+      st=$(dpkg-query -W -f='"'"'${Status}'"'"' "$p")
+      [ "$st" = "install ok installed" ] \
+        || { echo "ERREUR : $p rend « $st » et non « install ok installed »" >&2; exit 1; }
+    done
+    rm -rf /tmp/stub
+  ' _ "${BUILD_DEPS_KILLBIT[@]}"
+fi
+
 # live-boot doit être présent avant la génération de l'initramfs pour que ses
 # hooks y soient inclus ; on régénère quel que soit l'ordre choisi par apt.
 log "Régénération de l'initramfs avec le support live-boot"
@@ -309,10 +371,11 @@ in_chroot update-initramfs -u -k all
 # --- 4. killbit et overlay ----------------------------------------------------
 log "Installation de killbit et de l'overlay"
 install -D -m 0755 -o root -g root "$WORK_ROOT/killbit" "$CHROOT/usr/local/bin/killbit"
-printf 'url=%s\nsha256=%s\nbase=debian-%s\nreport_url=%s\nfront=%s\nwifi=%s\nmode=%s\nbuilt=%s\n' \
-  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$KILLBIT_REPORT_URL" "$KILLBIT_FRONT" \
+printf 'url=%s\nsha256=%s\nbase=debian-%s\nreport_url=%s\nfront=%s\nwifi=%s\nmode=%s\ndeps_compilation=%s\nbuilt=%s\n' \
+  "$KILLBIT_URL" "$actual_sha" "$DISTRO" "$KILLBIT_REPORT_URL" "guide" \
   "$([[ "$KILLBIT_WITH_WIFI" == "1" ]] && echo oui || echo non)" \
   "$([[ "$KILLBIT_WITH_BROWSER" == "1" ]] && echo graphique || echo console)" \
+  "$([[ "$KILLBIT_STUB_BUILD_DEPS" == "1" ]] && echo vides || echo reelles)" \
   "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   > "$CHROOT/etc/killbit-image-release"
 
@@ -323,15 +386,11 @@ while IFS= read -r -d '' rel; do
   chown root:root "$CHROOT/$rel"
 done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
 chmod 0755 "$CHROOT/usr/local/sbin/killbit-session.sh"
-
-# .bash_profile choisit le front sur la presence du script, pas sur un drapeau :
-# le meme fichier sert donc aux deux images. En mode shell, le retirer est ce
-# qui fait tomber le choix sur l'accueil en texte.
-if [[ "$KILLBIT_FRONT" == "guide" ]]; then
-  chmod 0755 "$CHROOT/usr/local/sbin/killbit-guide.sh"
-else
-  rm -f "$CHROOT/usr/local/sbin/killbit-guide.sh"
-fi
+# killbit-session.sh n'est plus un front concurrent mais le filet du front
+# guide : .bash_profile y retombe si dialog manque ou s'il n'y a pas de
+# terminal de controle, et l'operateur y arrive par Echap sur l'ecran de
+# saisie.
+chmod 0755 "$CHROOT/usr/local/sbin/killbit-guide.sh"
 
 # Historique pré-rempli : la commande d'effacement est alors accessible d'une
 # seule flèche vers le haut, ce qui évite de la retaper — URL comprise — sur
@@ -339,16 +398,16 @@ fi
 # Le marqueur <id_du_poste> est laissé tel quel volontairement : s'il n'est pas
 # remplacé, le shell refuse la ligne (c'est une redirection invalide) et rien
 # ne s'exécute.
+#
+# Le shell n'est qu'un detour dans cette image : la DERNIERE ligne, celle que
+# ramene la premiere fleche vers le haut, est donc « guide », le retour au
+# front, et non une commande d'effacement a completer.
 cat > "$CHROOT/root/.bash_history" <<EOF
 killbit --help
 killbit --check
 killbit -i <id_du_poste> -u $KILLBIT_REPORT_URL
+guide
 EOF
-# Dans l'image guidee, le shell n'est qu'un detour : la premiere fleche vers le
-# haut doit ramener au front, pas a une commande d'effacement a completer.
-if [[ "$KILLBIT_FRONT" == "guide" ]]; then
-  echo "guide" >> "$CHROOT/root/.bash_history"
-fi
 chmod 0600 "$CHROOT/root/.bash_history"
 
 # Hors mode navigateur, il n'y a pas de serveur X : laisser un .xinitrc
@@ -357,13 +416,29 @@ if [[ "$KILLBIT_WITH_BROWSER" != "1" ]]; then
   rm -f "$CHROOT/root/.xinitrc"
 fi
 
-# Connexion automatique en root sur tty1, qui enchaîne sur la session graphique.
-install -d -m 0755 "$CHROOT/etc/systemd/system/getty@tty1.service.d"
-cat > "$CHROOT/etc/systemd/system/getty@tty1.service.d/override.conf" <<'EOF'
+# Connexion automatique en root sur tty1, qui enchaîne sur le front.
+#
+# tty2 et tty3 en plus : ce sont les consoles de secours, atteintes par
+# Ctrl+Alt+F2 et Ctrl+Alt+F3. Elles sont demarrees des l'amorcage et deja
+# connectees en root — sans ce reglage, la bascule tombe sur une invite de
+# connexion que personne ne peut franchir, le compte root de l'image n'ayant
+# pas de mot de passe. C'est la sortie qui marche a TOUT moment, y compris
+# pendant que killbit ecrit sur les disques, la ou les sorties du front
+# (Echap, « Shell ») supposent que dialog a la main.
+for console in tty1 tty2 tty3; do
+  install -d -m 0755 "$CHROOT/etc/systemd/system/getty@$console.service.d"
+  cat > "$CHROOT/etc/systemd/system/getty@$console.service.d/override.conf" <<'EOF'
 [Service]
 ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
+done
+# getty@tty1 est demarre d'office ; les deux autres sont activees pour etre
+# la des l'amorcage. logind les lancerait de toute facon a la bascule, par son
+# alias autovt@ttyN qui resout vers getty@ttyN et prend donc le meme reglage,
+# mais une console deja ouverte est une console dont on ne depend pas pour
+# demarrer au bon moment.
+in_chroot systemctl enable getty@tty2.service getty@tty3.service
 
 cat > "$CHROOT/etc/default/keyboard" <<EOF
 XKBMODEL="pc105"
@@ -464,6 +539,7 @@ log "Construction de filesystem.squashfs"
 rm -f "$ISO_STAGE/live/filesystem.squashfs"
 mksquashfs "$CHROOT" "$ISO_STAGE/live/filesystem.squashfs" \
   -comp "$SQUASHFS_COMP" -Xcompression-level "$SQUASHFS_LEVEL" \
+  -b "$SQUASHFS_BLOCK" \
   -noappend -wildcards -no-progress \
   -e "boot/vmlinuz-*" -e "boot/initrd.img-*"
 

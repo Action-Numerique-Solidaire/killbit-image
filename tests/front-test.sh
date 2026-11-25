@@ -17,6 +17,13 @@
 # le comportement même que demande l'image guidée. La machine virtuelle est
 # alors coupée aussitôt.
 #
+# Quatrième contrôle, depuis qu'il n'y a plus qu'une image : la sortie de
+# secours. Ctrl+Alt+F2 doit donner une console utilisable, et Ctrl+Alt+F1
+# ramener au front. « Utilisable » se vérifie sans OCR : l'invite de l'image
+# écrit « killbit » en ROUGE VIF, ce qui ne peut apparaître que si l'autologin
+# a abouti ET que .bashrc a été lu. Une invite de connexion, elle, serait
+# blanche sur noir — et infranchissable, root n'ayant pas de mot de passe.
+#
 # Usage : tests/front-test.sh <image.iso> [dossier_de_sortie] [timeout_s]
 set -Eeuo pipefail
 
@@ -34,6 +41,11 @@ SEUIL_DIFF="${SEUIL_DIFF:-0.02}"
 # En dessous de cette part de bleu, dialog a quitté l'écran : killbit écrit en
 # texte sur fond noir.
 SEUIL_PARTI="${SEUIL_PARTI:-0.10}"
+# Nombre minimal de pixels rouges pour conclure que l'invite « killbit » est
+# affichee. Sept caracteres en 9x16 font un peu plus de mille pixels, dont un
+# tiers environ allumes : quelques dizaines suffisent, et aucun autre element
+# de cette image n'ecrit en rouge sur une console en texte.
+SEUIL_ROUGE="${SEUIL_ROUGE:-50}"
 
 [[ -f "$ISO" ]] || { echo "ERREUR : introuvable : $ISO" >&2; exit 1; }
 command -v qemu-system-x86_64 >/dev/null || { echo "ERREUR : qemu-system-x86_64 absent" >&2; exit 1; }
@@ -160,6 +172,15 @@ if mode == 'bleu':
         if b >= 110 and r <= 90 and g <= 90:
             bleus += 1
     print(f'{bleus/total:.4f} {w}x{h}')
+elif mode == 'rouge':
+    w, h, px = lire(sys.argv[2])
+    rouges = total = 0
+    for k in range(0, len(px), 3):
+        r, g, b = px[k], px[k+1], px[k+2]
+        total += 1
+        if r >= 110 and g <= 90 and b <= 90:
+            rouges += 1
+    print(f'{rouges} {rouges/total:.4f} {w}x{h}')
 elif mode == 'diff':
     w1, h1, a = lire(sys.argv[2])
     w2, h2, b = lire(sys.argv[3])
@@ -220,11 +241,45 @@ echo "[front-test] ecran de saisie : $part_bleu de surface bleue (seuil $SEUIL_B
 [[ -n "$saisie_ppm" ]] || { echo "[front-test] ECHEC : aucune capture"; exit 1; }
 analyse png "$saisie_ppm" "$OUTDIR/1-saisie.png" >/dev/null
 
+# --- sortie de secours : Ctrl+Alt+F2, puis retour par Ctrl+Alt+F1 -----------
+# Teste AVANT la saisie : apres, le decompte serait parti et la console de
+# secours arriverait pendant un effacement — ce qu'elle doit savoir faire, mais
+# pas ce qu'on peut observer proprement.
+echo "[front-test] bascule vers la console de secours (Ctrl+Alt+F2)"
+hmp "sendkey ctrl-alt-f2"
+console_ppm=""
+part_console="1"
+nb_rouge="0"
+deadline=$(( SECONDS + 90 ))
+while (( SECONDS < deadline )); do
+  console_ppm="$(capture 2-console)" || break
+  part_console="$(analyse bleu "$console_ppm" | cut -d' ' -f1)"
+  nb_rouge="$(analyse rouge "$console_ppm" | cut -d' ' -f1)"
+  if sup "$SEUIL_PARTI" "$part_console" && sup "$nb_rouge" "$SEUIL_ROUGE"; then break; fi
+  sleep 3
+done
+[[ -n "$console_ppm" ]] && analyse png "$console_ppm" "$OUTDIR/2-console.png" >/dev/null
+echo "[front-test] console de secours : $part_console de bleu, $nb_rouge pixels rouges (invite)"
+
+echo "[front-test] retour au front (Ctrl+Alt+F1)"
+hmp "sendkey ctrl-alt-f1"
+retour_ppm=""
+part_retour="0"
+deadline=$(( SECONDS + 90 ))
+while (( SECONDS < deadline )); do
+  retour_ppm="$(capture 3-retour)" || break
+  part_retour="$(analyse bleu "$retour_ppm" | cut -d' ' -f1)"
+  sup "$part_retour" "$SEUIL_BLEU" && break
+  sleep 3
+done
+[[ -n "$retour_ppm" ]] && analyse png "$retour_ppm" "$OUTDIR/3-retour.png" >/dev/null
+echo "[front-test] retour au front : $part_retour de surface bleue (seuil $SEUIL_BLEU)"
+
 echo "[front-test] saisie de l'identifiant $ID_TEST"
 taper "$ID_TEST"
 sleep 1
-frappe_ppm="$(capture 2-frappe)"
-analyse png "$frappe_ppm" "$OUTDIR/2-frappe.png" >/dev/null
+frappe_ppm="$(capture 4-frappe)"
+analyse png "$frappe_ppm" "$OUTDIR/4-frappe.png" >/dev/null
 
 hmp "sendkey ret"
 # Meme raison que plus haut : on attend que l'ecran change au lieu de dormir un
@@ -234,12 +289,12 @@ recap_ppm=""
 part_diff="0"
 deadline=$(( SECONDS + 120 ))
 while (( SECONDS < deadline )); do
-  recap_ppm="$(capture 3-recap)" || break
+  recap_ppm="$(capture 5-recap)" || break
   part_diff="$(analyse diff "$saisie_ppm" "$recap_ppm" | cut -d' ' -f1)"
   sup "$part_diff" "$SEUIL_DIFF" && break
   sleep 5
 done
-[[ -n "$recap_ppm" ]] && analyse png "$recap_ppm" "$OUTDIR/3-recap.png" >/dev/null
+[[ -n "$recap_ppm" ]] && analyse png "$recap_ppm" "$OUTDIR/5-recap.png" >/dev/null
 echo "[front-test] apres validation : $part_diff de pixels modifies (seuil $SEUIL_DIFF)"
 
 # Plus aucune touche a partir d'ici : le front doit partir tout seul. Le bleu
@@ -251,12 +306,12 @@ parti_ppm=""
 part_reste="1"
 deadline=$(( SECONDS + 90 ))
 while (( SECONDS < deadline )); do
-  parti_ppm="$(capture 4-parti)" || break
+  parti_ppm="$(capture 6-parti)" || break
   part_reste="$(analyse bleu "$parti_ppm" | cut -d' ' -f1)"
   sup "$SEUIL_PARTI" "$part_reste" && break
   sleep 2
 done
-[[ -n "$parti_ppm" ]] && analyse png "$parti_ppm" "$OUTDIR/4-parti.png" >/dev/null
+[[ -n "$parti_ppm" ]] && analyse png "$parti_ppm" "$OUTDIR/6-parti.png" >/dev/null
 echo "[front-test] apres le decompte : $part_reste de surface bleue (seuil < $SEUIL_PARTI)"
 
 # Coupure immediate : killbit vient de demarrer, il n'a aucune raison d'aller
@@ -268,5 +323,8 @@ rc=0
 sup "$part_bleu" "$SEUIL_BLEU" || { echo "[front-test] ECHEC : pas de front dialog a l'ecran"; rc=1; }
 sup "$part_diff" "$SEUIL_DIFF" || { echo "[front-test] ECHEC : l'ecran n'a pas reagi a la saisie"; rc=1; }
 sup "$SEUIL_PARTI" "$part_reste" || { echo "[front-test] ECHEC : le front attend encore une confirmation"; rc=1; }
-(( rc == 0 )) && echo "[front-test] OK : front affiche, reactif, et effacement lance sans confirmation"
+sup "$SEUIL_PARTI" "$part_console" || { echo "[front-test] ECHEC : Ctrl+Alt+F2 n'a pas quitte le front"; rc=1; }
+sup "$nb_rouge" "$SEUIL_ROUGE" || { echo "[front-test] ECHEC : pas d'invite killbit sur la console de secours"; rc=1; }
+sup "$part_retour" "$SEUIL_BLEU" || { echo "[front-test] ECHEC : Ctrl+Alt+F1 ne ramene pas au front"; rc=1; }
+(( rc == 0 )) && echo "[front-test] OK : front affiche, reactif, sortie de secours utilisable, effacement lance sans confirmation"
 exit "$rc"

@@ -44,7 +44,7 @@ debootstrap trixie  ──►  chroot minimal
 | 6 | `grub-mkstandalone` **dans le chroot** | Produit `BOOTX64.EFI` puis une image FAT `efi.img`. Fait dans le chroot, l'hôte n'a donc besoin ni de `grub-efi-amd64-bin` ni de `mtools`. |
 | 6bis | Extraire `isolinux.bin`, `isohdpfx.bin` et les `*.c32` | Les sortir du chroot **maintenant** est ce qui permet de purger juste après les paquets qui les fournissent. Lus plus tard, ils auraient imposé de garder 37 Mo d'outils de fabrication dans l'image livrée. |
 | 6ter | Purge des paquets de fabrication, de la doc, des pages de manuel et des locales non françaises | Une image d'effacement hors ligne n'a pas besoin de `mtools` ni de pages de manuel. |
-| 7 | `mksquashfs` | Compression `zstd` niveau 19 par défaut. zstd décompresse plusieurs fois plus vite que `xz`, ce qui raccourcit autant le démarrage chez l'opérateur que les tests d'amorçage ; le noyau Debian 13 déclare `CONFIG_SQUASHFS_ZSTD=y`. `KILLBIT_SQUASHFS_COMP=xz` revient à l'ancien réglage, pour quelques Mo de moins et un démarrage plus lent. |
+| 7 | `mksquashfs` | `zstd` niveau 22, **blocs de 1 Mo**. zstd décompresse plusieurs fois plus vite que `xz`, ce qui raccourcit autant le démarrage chez l'opérateur que les tests d'amorçage ; le noyau Debian 13 déclare `CONFIG_SQUASHFS_ZSTD=y`. Le bloc compte bien plus que le niveau : voir le tableau de mesures plus bas. |
 | 8 | Menus isolinux et GRUB | Un menu par mode d'amorçage. |
 | 9 | `xorriso` | Assemble l'ISO avec **deux entrées El Torito**. |
 
@@ -58,14 +58,32 @@ au préalable) :
 | Phase | Durée |
 |---|---|
 | Téléchargement et vérification de killbit | 2 s |
-| `debootstrap` trixie | 44 s |
-| `apt-get update` + `upgrade` | 7 s |
-| `apt-get install` (36 paquets) | 71 s |
-| `update-initramfs` | 13 s |
-| Purge des paquets de fabrication | 15 s |
-| `mksquashfs` (zstd niveau 19) | 32 s |
+| `debootstrap` trixie | 35 s |
+| `apt-get update` + `upgrade` | 4 s |
+| `apt-get install` (50 paquets demandés, 225 installés) | 87 s |
+| Paquets vides pour les dépendances de compilation | < 1 s |
+| `update-initramfs` | 11 s |
+| Purge des paquets de fabrication | 14 s |
+| `mksquashfs` (zstd 22, blocs de 1 Mio) | 57 s |
 | `xorriso` | 2 s |
-| **Total** | **186 s** |
+| **Total** | **212 s** |
+
+### Le réglage du squashfs, mesuré
+
+Même chroot, même contenu, quatre réglages :
+
+| Réglage | Taille | Durée |
+|---|---|---|
+| `zstd` 19, blocs de 128 Kio *(ancien)* | 295 067 648 o | 59 s |
+| `zstd` 22, blocs de 128 Kio | 295 051 264 o | 74 s |
+| **`zstd` 22, blocs de 1 Mio** *(retenu)* | **276 103 168 o** | 57 s |
+| `xz`, blocs de 1 Mio | 261 079 040 o | 50 s |
+
+Le **niveau** ne change rien : 16 Kio d'écart entre 19 et 22, pour 15 s de plus.
+C'est la **taille de bloc** qui compte — 18 Mo repris, et un peu plus vite, parce
+qu'il y a moins de blocs à compresser. `xz` reprendrait encore 14 Mo et se
+construit même plus vite ici, mais il décompresse plusieurs fois plus lentement,
+à chaque démarrage de chaque poste : le défaut reste `zstd`.
 
 Deux phases dominent : l'installation des paquets et le squashfs. Elles sont
 toutes deux proportionnelles à la taille de l'image, ce qui fait de la
@@ -201,12 +219,12 @@ racine du chroot.
 
 | Chemin | Rôle |
 |---|---|
-| `root/.bash_profile` | Sur `tty1` uniquement, enchaîne sur le front : `killbit-guide.sh` s'il est présent, sinon `startx` en mode navigateur, sinon l'accueil en texte. Le choix se fait sur la **présence des fichiers**, pas sur un drapeau de construction, pour qu'un seul fichier serve à toutes les variantes. Les autres consoles donnent un shell normal, utile au dépannage. |
-| `root/.bashrc` | Invite, réglages d'historique, alias `aide` et, dans l'image guidée, `guide` pour revenir au front. |
+| `root/.bash_profile` | Charge d'abord `.bashrc` — bash ne le lit pas de lui-même pour un shell de connexion, et sans cela les consoles de secours n'auraient ni l'invite, ni `aide`, ni `guide`. Puis, sur `tty1` **uniquement**, enchaîne sur le front : `killbit-guide.sh` s'il est présent, sinon `startx` en mode navigateur, sinon l'accueil en texte. Le choix se fait sur la **présence des fichiers**, pas sur un drapeau de construction. Les autres consoles s'arrêtent avant et rendent un shell : c'est la sortie de secours. |
+| `root/.bashrc` | Invite (`killbit` en rouge vif, ce que le test du front cherche à l'écran), réglages d'historique, alias `aide` et `guide`. |
 | `root/.bash_history` | **Généré par le script**, pas présent dans l'overlay : il dérive de `KILLBIT_REPORT_URL`, pour que l'écran d'accueil et l'historique ne puissent pas diverger. Dernière ligne = première flèche vers le haut. |
 | `root/.xinitrc` | Mode navigateur uniquement, et **sans gestionnaire de fenêtres**. Retiré de l'image en mode console, pour que le chemin de démarrage reste sans ambiguïté. |
 | `usr/local/sbin/killbit-session.sh` | Écran d'accueil en texte : identité de l'image, réseau, supports, commande à lancer. Puis un shell interactif. `--aide-seule` pour le réafficher. |
-| `usr/local/sbin/killbit-guide.sh` | Front ncurses (`dialog`) de l'image guidée : saisie de l'identifiant, récapitulatif en décompte, `killbit --yes`, journal dans `/var/log/killbit/`. **Retiré du chroot** quand `KILLBIT_FRONT=shell`. |
+| `usr/local/sbin/killbit-guide.sh` | Front ncurses (`dialog`) : saisie de l'identifiant, récapitulatif en décompte, `killbit --yes`, journal dans `/var/log/killbit/`. Rappelle `Ctrl+Alt+F2` dans la bordure basse de chaque boîte. |
 | `etc/systemd/system/killbit-ready.service` | Émet `KILLBIT-IMAGE-READY` sur la console série. C'est ce que le test d'amorçage attend. |
 | `etc/network/` | Dossier vide, voir le tableau des pièges. |
 
@@ -215,25 +233,24 @@ Le fichier `systemd-networkd` qui portait le DHCP a été retiré : killbit appe
 réseau sur les mêmes interfaces se gênent. NetworkManager gère les interfaces,
 `systemd-resolved` le DNS.
 
-### Les deux fronts, et ce que chacun promet
+### Un seul front, et ce qu'il promet
 
-`KILLBIT_FRONT` choisit ce qui s'affiche sur `tty1`. Les deux images sortent du
-même script et ne diffèrent que par un paquet, `dialog`, et par la présence de
-`killbit-guide.sh`.
+Il y a eu deux images jusqu'à la `v0.2.0`, choisies par `KILLBIT_FRONT` : une
+guidée, une qui rendait simplement un shell. Elles ne différaient que par un
+paquet, `dialog`, et par la présence de `killbit-guide.sh`. Cela faisait deux
+ISO à télécharger, deux constructions à tester et une question de plus à
+l'atelier, pour un seul comportement réellement différent — et ce comportement
+est maintenant **dans** l'image unique, à `Ctrl+Alt+F2`.
 
-| | `shell` (défaut) | `guide` |
+| | Front (`tty1`) | Consoles de secours (`tty2`, `tty3`) |
 |---|---|---|
-| ISO | `killbit-live.iso` | `killbit-live-guide.iso` |
-| Au démarrage | accueil en texte, puis un shell | front ncurses plein écran |
-| Saisie | l'opérateur tape la commande, pré-remplie dans l'historique | l'identifiant du poste, et rien d'autre |
-| Appel de killbit | sans `--yes` : killbit garde toutes ses confirmations | **avec `--yes`** : killbit ne demande plus rien |
-| Confirmations avant écriture | celles de killbit | **aucune** : un décompte de 8 s, annulable par `Echap` |
+| Au démarrage | front ncurses plein écran | shell root, déjà connecté |
+| Saisie | l'identifiant du poste, et rien d'autre | l'opérateur tape la commande, pré-remplie dans l'historique |
+| Appel de killbit | **avec `--yes`** : killbit ne demande plus rien | sans `--yes` : killbit garde toutes ses confirmations |
+| Confirmations avant écriture | **aucune** : un décompte de 8 s, annulable par `Echap` | celles de killbit |
 
-Dans l'image `shell`, **rien ne s'efface tout seul** : `killbit` n'y est appelé
-nulle part avec `--yes`.
-
-Dans l'image `guide`, `--yes` est le but : enchaîner les postes sans répondre à
-des questions. Le front n'en rajoute donc aucune. La saisie de l'identifiant est
+`--yes` est le but du front : enchaîner les postes sans répondre à des
+questions. Le front n'en rajoute donc aucune. La saisie de l'identifiant est
 le dernier geste de l'opérateur ; le récapitulatif qui suit — identifiant saisi,
 serveur, et **liste des disques qui vont être effacés**, avec leur taille, modèle
 et numéro de série — est un `dialog --pause` de `DELAI_AVANT_EFFACEMENT`
@@ -254,6 +271,31 @@ l'image, ou pas de terminal de contrôle. Il bascule alors sur l'accueil en
 texte, parce qu'un poste d'atelier qui démarre sur un écran noir serait pire
 qu'un poste sans front.
 
+### Les sorties de secours
+
+Depuis qu'il n'y a plus qu'une image, le shell doit être atteignable **depuis**
+le front. Trois chemins, dont un seul est inconditionnel :
+
+| Chemin | Disponible quand | Mécanisme |
+|---|---|---|
+| `Ctrl+Alt+F2`, `Ctrl+Alt+F3` | **toujours**, y compris pendant que killbit écrit | `getty@tty2` et `getty@tty3` activées, avec `agetty --autologin root` |
+| `Echap` sur l'écran de saisie | le front a la main | `demander_id` rend 1, le front `exec` l'accueil en texte |
+| `Shell` en fin de passage | le front a la main | bouton `--cancel-label` du menu |
+
+L'autologin n'est pas un confort : le compte root de l'image **n'a pas de mot
+de passe**, donc une console avec invite de connexion serait infranchissable.
+C'est aussi pourquoi `tty4` à `tty6`, que logind ouvre sans ce réglage, ne
+servent à rien.
+
+Le front rappelle `Ctrl+Alt+F2` dans la **bordure basse de chaque boîte**
+(`--hline`), décompte compris : une sortie que personne ne connaît n'est pas
+une sortie.
+
+`Ctrl+Alt+F1` ramène au front, dans l'état où il était — le noyau conserve
+l'écran de chaque console, rien n'est redessiné. La commande `guide` y ramène
+aussi, et c'est la dernière ligne de l'historique, donc la première flèche vers
+le haut.
+
 ---
 
 ## 5. Construire localement
@@ -272,11 +314,12 @@ chroot et leurs artefacts en sont extraits.
 | `KILLBIT_SHA256` | vide | Empreinte attendue ; échec si différente |
 | `KILLBIT_REPORT_URL` | `https://actionnumeriquesolidaire.org` | Adresse de remontée, pré-remplie dans l'historique du shell et affichée à l'accueil |
 | `KILLBIT_KEYMAP` | `fr` | Disposition clavier de la console |
-| `KILLBIT_FRONT` | `shell` | `guide` construit l'image à front ncurses, qui lance `killbit --yes` |
+| `KILLBIT_STUB_BUILD_DEPS` | `1` | `0` réembarque la vraie chaîne de compilation que killbit réclame, à la place des quatre paquets vides : +88 Mo d'ISO |
 | `KILLBIT_WITH_WIFI` | `1` | `0` retire micrologiciels Wi-Fi et `wpasupplicant` ; tous les rapports porteront alors « wifi non opérationnel » |
 | `KILLBIT_WITH_BROWSER` | `0` | `1` réembarque X et firefox, sans gestionnaire de fenêtres |
-| `KILLBIT_SQUASHFS_COMP` | `zstd` | Compression du squashfs (`xz` pour quelques Mo de moins, au prix du temps) |
-| `KILLBIT_SQUASHFS_LEVEL` | `19` | Niveau de compression |
+| `KILLBIT_SQUASHFS_COMP` | `zstd` | Compression du squashfs (`xz` pour une vingtaine de Mo de moins, au prix du temps de construction et de décompression) |
+| `KILLBIT_SQUASHFS_LEVEL` | `22` | Niveau de compression. Sans effet mesurable ici, voir le tableau |
+| `KILLBIT_SQUASHFS_BLOCK` | `1M` | Taille de bloc. C'est **elle** qui compte |
 | `KILLBIT_ISO_WORK` | `/srv/killbit-iso-build` | Répertoire de travail |
 | `KILLBIT_DISTRO` | `trixie` | Suite Debian |
 
@@ -300,7 +343,7 @@ sinon l'émulation — environ deux minutes et demie dans ce cas.
 ### Le front guidé
 
 ```bash
-tests/front-test.sh killbit-live-guide.iso captures/
+tests/front-test.sh killbit-live.iso captures/
 ```
 
 Un contrôle de contenu voit les fichiers, pas l'écran : un `.bash_profile` qui
@@ -317,7 +360,15 @@ le verdict est automatique **sans OCR** :
    `fr` est bien active ;
 3. il valide et vérifie que **l'écran a changé**, ce qui distingue un front
    vivant d'une image figée ;
-4. puis il ne frappe plus rien, et vérifie que **le bleu quitte l'écran de
+4. entre les deux, il éprouve la **sortie de secours** : `Ctrl+Alt+F2` envoyé
+   au clavier du poste doit faire disparaître le bleu, et l'invite de l'image
+   doit être là. Elle écrit `killbit` en **rouge vif** — une cinquantaine de
+   pixels suffisent à la reconnaître, et rien d'autre dans cette image n'écrit
+   en rouge sur une console en texte. Un simple écran noir ne prouverait rien,
+   une invite de connexion non plus : c'est le rouge qui prouve que l'autologin
+   a abouti **et** que `.bashrc` a été lu. Puis `Ctrl+Alt+F1` doit ramener le
+   front, inchangé ;
+5. puis il ne frappe plus rien, et vérifie que **le bleu quitte l'écran de
    lui-même** : c'est le décompte qui arrive au bout et killbit qui prend la
    console. Un écran resté bleu signifierait que quelque chose attend encore un
    opérateur — exactement ce que cette image ne doit plus faire. La machine
@@ -354,23 +405,19 @@ sur `ubuntu-24.04`.
    l'image des runners : l'installer coûtait un `apt-get update` pour rien.
    Attention, il est appelé sans seuil de sévérité, donc une remontée `info`
    suffit à faire échouer le job — c'est voulu, mais ça surprend.
-2. **Les deux images en parallèle**, par une matrice `front: [shell, guide]`.
-   Elles sortent du même script : les construire côte à côte coûte le temps
-   d'une seule. `fail-fast` est désactivé — si l'une casse, on veut savoir si
-   l'autre tient.
-3. **Choix du disque de travail** : `/mnt`, le disque temporaire du runner, est
+2. **Choix du disque de travail** : `/mnt`, le disque temporaire du runner, est
    bien plus grand que la racine. L'y mettre a remplacé l'étape qui supprimait
    dotnet, android et ghc pour faire de la place — elle coûtait **90 secondes**,
    soit 18 % du job, pour un besoin qui n'existe plus depuis que l'image est
    légère. Repli automatique sur `RUNNER_TEMP` si `/mnt` manque de place.
-4. Construction.
-5. **Contrôle El Torito** : une entrée BIOS *et* une entrée UEFI. Une ISO BIOS
+3. Construction.
+4. **Contrôle El Torito** : une entrée BIOS *et* une entrée UEFI. Une ISO BIOS
    seul ne démarre pas sur du matériel post-2012 à CSM désactivé, et le défaut
    est invisible à l'œil nu.
-6. **Contrôle de l'empreinte publiée** : format au nom nu, puis un
+5. **Contrôle de l'empreinte publiée** : format au nom nu, puis un
    `sha256sum -c` réel. Le `.sha256` a un temps porté le chemin du runner, ce
    qui rendait invérifiable la commande que la documentation donne pourtant.
-7. **Contrôle du contenu**, en trois volets.
+6. **Contrôle du contenu**, en trois volets.
    Ce qui doit être là : killbit, ses outils, les trois bibliothèques, le front
    de l'opérateur, l'historique pré-rempli — la commande d'effacement y est
    cherchée littéralement — et de quoi faire aboutir le test Wi-Fi de killbit
@@ -378,15 +425,20 @@ sur `ubuntu-24.04`.
    Ce qui doit avoir **disparu** : X, openbox, xterm, firefox, les outils de
    fabrication. Sans ce volet, la minimisation se déferait au premier ajout de
    paquet distrait, et personne ne le verrait.
-   Et ce qui **distingue les deux images** : `dialog` et `killbit-guide.sh`
-   présents dans l'image guidée, absents de l'autre, `front=` conforme dans
-   `/etc/killbit-image-release`. Sans ce volet, les deux images pourraient être
-   livrées identiques sans que rien n'alerte.
-8. **Tests d'amorçage réels**, BIOS et UEFI menés **en parallèle**. Le runner
+   Et les **sorties de secours** : `getty@tty2` et `getty@tty3` activées,
+   `--autologin root` dans leur réglage, et le rappel `Ctrl+Alt+F2` présent dans
+   le front. Une console de secours qui demanderait un mot de passe serait
+   infranchissable, et une sortie que le front n'affiche pas n'existe pas pour
+   l'opérateur.
+   Au même endroit, le verrou sur la chaîne de compilation : `g++`, `cc` et
+   `make` doivent être **absents** du système de fichiers alors que le critère
+   de killbit passe sur les seize paquets. S'ils réapparaissent, c'est qu'un
+   paquet vide a été remplacé par le vrai et que l'ISO a repris 88 Mo.
+7. **Tests d'amorçage réels**, BIOS et UEFI menés **en parallèle**. Le runner
    n'a pas KVM, les deux amorçages tournent donc en émulation : les enchaîner
    coûtait le double pour rien, les deux processus QEMU ne se gênant qu'à la
    marge sur quatre vCPU.
-9. **Test du front ncurses** sur l'image guidée seulement (voir § 6).
+8. **Test du front ncurses**, sortie de secours comprise (voir § 6).
 10. Publication, dans un **job distinct** : une seule release porte les deux
     images, elle attend donc les deux constructions. Prerelease glissante
     `latest` à chaque push sur `main`, release versionnée sur tag `v*`.
@@ -404,12 +456,18 @@ sur `ubuntu-24.04`.
 - L'image démarre en root avec connexion automatique, sans mot de passe. C'est
   volontaire — un outil d'atelier doit être immédiatement utilisable — mais
   cela suppose un contrôle physique de la machine.
-- **L'image guidée lance `killbit --yes` sans confirmation.** Elle ne pose
+- **L'image lance `killbit --yes` sans confirmation.** Elle ne pose
   qu'une question, l'identifiant du poste ; le décompte de 8 secondes est tout
   ce qui sépare la saisie de l'écriture. C'est son intérêt en atelier et son
   risque : un identifiant saisi sur le mauvais poste efface le mauvais poste.
-  L'image `shell` reste disponible pour qui préfère les confirmations de
-  killbit.
+  Pour un passage avec les confirmations de killbit, `Ctrl+Alt+F2` puis la
+  commande de l'historique, qui ne porte pas `--yes`.
+- **Les quatre dépendances de compilation sont des paquets vides.** Le critère
+  de killbit est satisfait, sa fonction ne l'est pas : rien dans l'image ne
+  compile. Sans conséquence aujourd'hui — il n'appelle aucun compilateur,
+  vérifié dans ses chaînes — mais une version de killbit qui compilerait
+  échouerait là sans qu'aucun message d'absence de paquet n'apparaisse.
+  `KILLBIT_STUB_BUILD_DEPS=0` reconstruit avec la vraie chaîne, pour 88 Mo.
 - Le test Wi-Fi de killbit dépend du micrologiciel de la carte. Les familles
   Intel, Atheros, Broadcom, Marvell et Realtek sont embarquées ;
   `firmware-ti-connectivity` ne l'est pas. Une carte hors de ces familles sera
