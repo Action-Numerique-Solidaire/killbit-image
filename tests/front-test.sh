@@ -31,7 +31,7 @@ ISO="${1:?Usage: front-test.sh <image.iso> [dossier_de_sortie] [timeout_s]}"
 OUTDIR="${2:-$PWD/front-test-out}"
 TIMEOUT="${3:-600}"
 MARKER="KILLBIT-IMAGE-READY"
-ID_TEST="R21062200075"
+ID_TEST="21062200075"
 # Part minimale de l'écran peinte en bleu pour conclure qu'un front dialog est
 # affiché. Calibré sur l'image réelle : ~0,78 pour l'écran de saisie.
 SEUIL_BLEU="${SEUIL_BLEU:-0.40}"

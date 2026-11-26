@@ -66,7 +66,7 @@ aide() {
 Cette image efface les disques d'un poste et remonte un rapport.
 
 Deroulement :
-  1. saisir l'identifiant (etiquette QRcode, ex. R21062200075)
+  1. saisir l'identifiant (etiquette QRcode : 11 chiffres, ex. 21062200075)
   2. relire le recapitulatif : identifiant, serveur, supports
   3. ne rien faire : l'effacement part seul apres $DELAI_AVANT_EFFACEMENT secondes
      et ne s'arrete plus. Echap pendant le decompte annule.
@@ -117,10 +117,11 @@ demander_id() {
       --inputbox "\
 Saisir l'identifiant du poste, puis valider.
 
-Il figure sur l'etiquette QRcode, au format R21062200075.
+Il figure sur l'etiquette QRcode : 11 chiffres, sans
+aucune lettre, par exemple 21062200075.
 
 Reseau  : $(reseau)
-Serveur : $report_url" 14 72)"
+Serveur : $report_url" 15 72)"
     rc=$?
     case $rc in
       0) ;;
@@ -135,11 +136,14 @@ Serveur : $report_url" 14 72)"
       continue
     fi
 
-    # Format canonique : une lettre suivie de 11 chiffres. Un identifiant qui
-    # s'en ecarte n'est pas refuse — killbit accepte aussi les identifiants
-    # Killbit.fr — mais il est signale : une faute de frappe rattache le rapport
-    # au mauvais poste, et cela ne se decouvre qu'apres l'effacement.
-    if ! [[ "$saisi" =~ ^[A-Za-z][0-9]{11}$ ]]; then
+    # Format canonique : 11 chiffres, aucune lettre. C'est ce format qui est
+    # VERIFIE en aval, un identifiant qui s'en ecarte n'y sera pas reconnu.
+    # Il n'est pas refuse ici pour autant — killbit accepte aussi les
+    # identifiants Killbit.fr, et le front ne doit pas bloquer un atelier sur
+    # un cas que personne n'a prevu — mais il est signale, et c'est « Corriger »
+    # qui est propose par defaut : une faute de frappe rattache le rapport au
+    # mauvais poste, et cela ne se decouvre qu'apres l'effacement.
+    if ! [[ "$saisi" =~ ^[0-9]{11}$ ]]; then
       dlg --title "Format inhabituel" --defaultno \
         --yes-label "Utiliser quand meme" --no-label "Corriger" \
         --yesno "\
@@ -147,10 +151,11 @@ L'identifiant saisi :
 
     $saisi
 
-ne ressemble pas au format attendu R21062200075 (une lettre
-suivie de 11 chiffres).
+n'est pas au format attendu : 11 chiffres, sans aucune lettre,
+par exemple 21062200075. C'est ce format qui est verifie en
+aval ; un autre identifiant risque de n'y etre pas reconnu.
 
-L'utiliser quand meme ?" 14 68 || continue
+L'utiliser quand meme ?" 15 68 || continue
     fi
 
     ID="$saisi"

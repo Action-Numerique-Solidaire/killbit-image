@@ -421,7 +421,7 @@ le verdict est automatique **sans OCR** :
 1. il attend le marqueur, puis **que l'écran devienne bleu** — `dialog` peint le
    fond sur toute la surface, ce qu'une console en texte ne fait jamais. Le
    seuil est de 40 % de pixels bleus ; l'écran de saisie en fait 78 % ;
-2. il tape `R21062200075` au clavier du poste, via le moniteur QEMU. Les
+2. il tape `21062200075` au clavier du poste, via le moniteur QEMU. Les
    chiffres passent par `shift-<chiffre>` : la console est en AZERTY, où
    `sendkey 2` produit « é » — ce qui a au passage confirmé que la disposition
    `fr` est bien active ;

@@ -263,6 +263,15 @@ jobs:
           else
             echo "::error::le front n_affiche pas la sortie vers un terminal"; fail=1
           fi
+          # Format de l_identifiant de poste : 11 chiffres, aucune lettre,
+          # c_est lui qui est verifie en aval. Si ce controle de forme
+          # disparaissait du front, une faute de frappe partirait sans un mot,
+          # et ne se decouvrirait qu_apres l_effacement.
+          if sudo grep -qF '^[0-9]{11}$' /mnt/sq/usr/local/sbin/killbit-guide.sh; then
+            echo "  OK       front : identifiant attendu en 11 chiffres"
+          else
+            echo "::error::le front ne controle plus le format de l_identifiant"; fail=1
+          fi
           if sudo grep -q '^front=guide$' /mnt/sq/etc/killbit-image-release; then
             echo "  OK       front=guide declare dans /etc/killbit-image-release"
           else

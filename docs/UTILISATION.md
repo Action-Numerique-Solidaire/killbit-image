@@ -95,7 +95,8 @@ Rien à taper au clavier sauf l'identifiant. Le poste démarre directement sur
 l'écran de saisie.
 
 **1. Identifiant du poste.** Saisissez l'identifiant qui figure sur
-l'**étiquette QRcode**, au format `R21062200075`, puis `Valider`. L'écran
+l'**étiquette QRcode** — 11 chiffres, sans aucune lettre, par exemple
+`21062200075` —, puis `Valider`. L'écran
 rappelle l'adresse de remontée et l'état du réseau.
 
 Le clavier est en disposition **française** : les chiffres s'obtiennent avec
@@ -161,7 +162,8 @@ killbit -i <id_du_poste> -u https://actionnumeriquesolidaire.org
 ```
 
 Remplacez `<id_du_poste>` par l'identifiant serveur de la machine, celui qui
-figure sur son **étiquette QRcode**, au format `R21062200075`, puis validez.
+figure sur son **étiquette QRcode** (11 chiffres, sans lettre, par exemple
+`21062200075`), puis validez.
 Vous n'avez donc jamais à retaper l'adresse, qui est la source d'erreur la plus
 fréquente.
 
