@@ -51,7 +51,8 @@ jobs:
           shellcheck build-iso.sh \
             overlay/usr/local/sbin/killbit-session.sh \
             overlay/usr/local/sbin/killbit-guide.sh \
-            tests/boot-test.sh tests/front-test.sh
+            overlay/usr/local/sbin/killbit-dns-netboot.sh \
+            tests/boot-test.sh tests/front-test.sh tests/netboot-dns-test.sh
 
   build:
     runs-on: ubuntu-24.04
@@ -262,6 +263,29 @@ jobs:
           else
             echo "::error::/etc/killbit-image-release ne declare pas front=guide"; fail=1
           fi
+
+          echo "--- le DNS d_un poste demarre par le reseau ---"
+          # En netboot (PXE/NFS), c_est l_initramfs qui configure la carte, et
+          # live-boot la declare « manual » dans /etc/network/interfaces pour
+          # que personne ne coupe la racine NFS sous le systeme. NetworkManager
+          # laisse donc cette carte de cote et ne transmet jamais a resolved le
+          # DNS recu en DHCP : plus un nom ne se resout, et killbit s_arrete sur
+          # « Impossible de contacter le serveur » sans rien effacer. Constate
+          # sur materiel reel, reproduit et corrige en VM — le test complet est
+          # tests/netboot-dns-test.sh, qui demande un serveur NFS et un pont, et
+          # ne tourne donc pas ici.
+          if sudo test -x /mnt/sq/usr/local/sbin/killbit-dns-netboot.sh; then
+            echo "  OK       usr/local/sbin/killbit-dns-netboot.sh"
+          else echo "::error::script du DNS en netboot absent ou non executable"; fail=1; fi
+          if sudo test -L /mnt/sq/etc/systemd/system/multi-user.target.wants/killbit-dns-netboot.service; then
+            echo "  OK       killbit-dns-netboot active au demarrage"
+          else echo "::error::killbit-dns-netboot non active : un poste PXE restera sans DNS"; fail=1; fi
+          # Le garde-fou qui le rend sans effet hors netboot : s_il disparait,
+          # le service irait reecrire le DNS d_un poste demarre sur CD ou cle,
+          # ou NetworkManager fait deja le travail.
+          if sudo grep -q 'ConditionPathExistsGlob=/run/net-' /mnt/sq/etc/systemd/system/killbit-dns-netboot.service; then
+            echo "  OK       service limite a l_amorcage par le reseau"
+          else echo "::error::le service n_est plus conditionne a /run/net-*.conf"; fail=1; fi
 
           echo "--- ne doit PLUS etre present (verrou de minimisation) ---"
           # usr/bin/g++ et cc : les quatre dependances de compilation de killbit

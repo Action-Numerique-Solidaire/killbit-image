@@ -1,0 +1,23 @@
+# Transmet a systemd-resolved le DNS recu en DHCP par l'initramfs quand le
+# poste a demarre par le reseau. Voir killbit-dns-netboot.sh pour le pourquoi :
+# en netboot la carte est volontairement « manual », NetworkManager ne la gere
+# donc pas et resolved reste sans serveur amont.
+#
+# Ordonne avant le marqueur de disponibilite et avant les consoles : quand le
+# front guide s'affiche, la resolution marche deja.
+[Unit]
+Description=DNS de l'amorcage reseau transmis a systemd-resolved
+ConditionPathExistsGlob=/run/net-*.conf
+Wants=systemd-resolved.service
+After=systemd-resolved.service
+Before=killbit-ready.service getty.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/killbit-dns-netboot.sh
+StandardOutput=journal
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

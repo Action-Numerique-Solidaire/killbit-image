@@ -226,12 +226,73 @@ racine du chroot.
 | `usr/local/sbin/killbit-session.sh` | Écran d'accueil en texte : identité de l'image, réseau, supports, commande à lancer. Puis un shell interactif. `--aide-seule` pour le réafficher. |
 | `usr/local/sbin/killbit-guide.sh` | Front ncurses (`dialog`) : saisie de l'identifiant, récapitulatif en décompte, `killbit --yes`, journal dans `/var/log/killbit/`. Rappelle `Ctrl+Alt+F2` dans la bordure basse de chaque boîte. |
 | `etc/systemd/system/killbit-ready.service` | Émet `KILLBIT-IMAGE-READY` sur la console série. C'est ce que le test d'amorçage attend. |
+| `usr/local/sbin/killbit-dns-netboot.sh` | Donne à `systemd-resolved` le DNS reçu en DHCP par l'initramfs quand le poste a démarré par le réseau. Sans lui, un poste en PXE/NFS ne résout plus aucun nom. |
+| `etc/systemd/system/killbit-dns-netboot.service` | Lance le précédent, conditionné à la présence de `/run/net-*.conf`, avant le marqueur de disponibilité et avant les consoles. |
 | `etc/network/` | Dossier vide, voir le tableau des pièges. |
 
 Le fichier `systemd-networkd` qui portait le DHCP a été retiré : killbit appelle
 `nmcli dev wifi list`, NetworkManager doit donc tourner, et deux gestionnaires
 réseau sur les mêmes interfaces se gênent. NetworkManager gère les interfaces,
 `systemd-resolved` le DNS.
+
+### Le DNS d'un poste démarré par le réseau
+
+Cette combinaison a un angle mort, et il ne se voit que par PXE. Constaté sur
+matériel réel derrière un serveur BITS en mode passerelle : le live démarre,
+monte sa racine NFS, obtient son adresse et sa route — et ne résout plus un
+seul nom. `killbit` s'arrête sur « Impossible de contacter le serveur », sans
+rien effacer, sans rien qui désigne le DNS.
+
+La chaîne, dans l'ordre :
+
+1. en netboot, c'est **l'initramfs** qui configure la carte (`ipconfig`,
+   `ip=dhcp`) — il écrit tout ce qu'il a reçu dans `/run/net-<carte>.conf`,
+   fichier que `/run` transporte tel quel jusqu'au système démarré ;
+2. `live-boot` écrit ensuite `iface <carte> inet manual` dans
+   `/etc/network/interfaces` (`9990-netbase.sh`), **volontairement** : si
+   quelqu'un reconfigurait cette carte, le système perdrait la racine NFS qu'il
+   est en train d'exécuter ;
+3. le greffon `ifupdown` de NetworkManager est en `managed=false` : toute carte
+   nommée dans `/etc/network/interfaces` est donc laissée de côté
+   (`nmcli dev` → `unmanaged`) ;
+4. NetworkManager étant la seule source de DNS de l'image, `resolved` n'a
+   **aucun serveur amont**, et `/etc/resolv.conf` pointe sur son stub en
+   `127.0.0.53` : la libc interroge donc un résolveur qui n'a personne à qui
+   demander.
+
+Rien de tout cela n'est un défaut de l'image prise séparément : chaque maillon
+fait ce qu'il doit. `killbit-dns-netboot.service` relit `/run/net-*.conf` et
+transmet le DNS à `resolved` (`resolvectl dns`, `default-route`, `domain`).
+**Il ne touche ni la carte, ni ses adresses, ni ses routes** — rien qui puisse
+couper la racine NFS. Hors netboot, il n'y a pas de `/run/net-*.conf` et le
+service ne fait rien.
+
+Mesuré en labo, poste en netboot NFS derrière un `dnsmasq` qui fait DHCP
+complet et relais DNS :
+
+| | Sans le service | Avec |
+|---|---|---|
+| `nmcli dev` | `ens3 unmanaged` | `ens3 unmanaged` (inchangé, et c'est voulu) |
+| `resolvectl status` | aucun serveur, `-DefaultRoute` | `DNS Servers: 192.168.80.1`, `+DefaultRoute` |
+| `getent hosts` | rien | l'adresse |
+| `curl https://…` | « Could not resolve host » | `200` |
+| Requête vue par le serveur | **aucune** | `query[A] … from 192.168.80.157` |
+
+`tests/netboot-dns-test.sh <image.iso>` refait ce labo et rend un verdict. Il
+demande `sudo`, `nfs-kernel-server`, `dnsmasq-base` et `qemu-system-x86` : il
+monte l'ISO, en sort noyau, initrd et squashfs, les sert en NFS, crée un pont
+avec un `dnsmasq` **hors ligne** (il résout lui-même un nom fabriqué), et
+démarre le poste avec la ligne de commande du menu iPXE. Le poste pose son
+propre diagnostic : `live-config.hooks=file://…` lui fait exécuter un script
+déposé sur le média, qui écrit ses mesures sur le port série — l'image sous
+test n'est pas modifiée, et le verdict porte sur du texte, pas sur une image
+d'écran. Le test échoue bien sur une image sans le service.
+
+Ce test ne tourne pas en CI : un serveur NFS et un pont sur le runner pour un
+défaut qui se contrôle autrement. La CI vérifie que le script est présent et
+exécutable, que l'unité est activée, et qu'elle est **toujours conditionnée** à
+`/run/net-*.conf` — sans quoi elle irait réécrire le DNS d'un poste démarré sur
+clé, où NetworkManager fait déjà le travail.
 
 ### Un seul front, et ce qu'il promet
 

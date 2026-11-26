@@ -391,6 +391,7 @@ chmod 0755 "$CHROOT/usr/local/sbin/killbit-session.sh"
 # terminal de controle, et l'operateur y arrive par Echap sur l'ecran de
 # saisie.
 chmod 0755 "$CHROOT/usr/local/sbin/killbit-guide.sh"
+chmod 0755 "$CHROOT/usr/local/sbin/killbit-dns-netboot.sh"
 
 # Historique pré-rempli : la commande d'effacement est alors accessible d'une
 # seule flèche vers le haut, ce qui évite de la retaper — URL comprise — sur
@@ -455,6 +456,13 @@ EOF
 # /etc/resolv.conf pointe sur son stub.
 # Sans cela l'image démarre sans adresse IP et killbit ne remonte aucun rapport.
 in_chroot systemctl enable NetworkManager.service systemd-resolved.service killbit-ready.service
+# En amorçage par le réseau, NetworkManager ne gère pas la carte qui porte la
+# racine NFS (live-boot la déclare « manual » pour ne pas la couper) : il ne
+# transmet donc jamais à resolved le DNS reçu en DHCP, et plus un nom ne se
+# résout. Ce service le fait, depuis /run/net-<carte>.conf. Mesuré en labo :
+# sans lui, un poste démarré en PXE/NFS échoue sur « Impossible de contacter
+# le serveur » sans rien effacer.
+in_chroot systemctl enable killbit-dns-netboot.service
 in_chroot systemctl disable systemd-networkd.service 2>/dev/null || true
 
 echo "killbit-live" > "$CHROOT/etc/hostname"

@@ -102,6 +102,33 @@ est au front, pas dans l'image.
 Le clavier est en disposition française par défaut (`KILLBIT_KEYMAP`), parce que
 saisir une URL sur un clavier AZERTY mal configuré est une épreuve.
 
+## Démarrage par le réseau (PXE/NFS)
+
+L'image est aussi déployée par un serveur [BITS](https://github.com/Action-Numerique-Solidaire/bits) :
+le poste démarre en PXE et monte sa racine en NFS, sans clé USB. Rien à changer
+dans l'image pour cela — mais une chose devait y être ajoutée.
+
+En netboot, c'est **l'initramfs** qui configure la carte réseau, et `live-boot`
+la déclare ensuite `manual` dans `/etc/network/interfaces` pour que personne ne
+reconfigure la carte qui porte la racine NFS — sinon le système perdrait son
+disque en pleine exécution. NetworkManager laisse donc cette carte de côté
+(`unmanaged`) et, étant la seule source de DNS de l'image, ne transmet jamais à
+`systemd-resolved` le DNS reçu en DHCP. Adresse et route sont là, **plus un
+seul nom ne se résout**, et killbit s'arrête sur « Impossible de contacter le
+serveur » sans rien effacer et sans que rien ne désigne le DNS. Constaté sur
+matériel réel, reproduit en VM.
+
+`killbit-dns-netboot.service` relit le DNS là où l'initramfs l'a écrit
+(`/run/net-<carte>.conf`) et le transmet à `resolved`. Il ne touche ni la carte,
+ni ses adresses, ni ses routes — rien qui puisse couper la racine NFS. Hors
+netboot, il ne fait rien : NetworkManager garde la main.
+
+Mesuré en labo (poste en netboot NFS derrière un `dnsmasq` complet) : sans le
+service, `resolved` n'a aucun serveur, **aucune requête n'atteint le serveur**
+et `curl` répond « Could not resolve host » ; avec, le nom se résout et HTTPS
+rend `200`. `tests/netboot-dns-test.sh` refait ce labo et rend un verdict ;
+détail dans [docs/CONSTRUCTION.md](docs/CONSTRUCTION.md).
+
 ## Construire localement
 
 ```bash
@@ -328,6 +355,8 @@ workflow vérifie que :
 - les composants retirés sont bien **absents** — X, openbox, xterm, firefox et
   les outils de fabrication. Sans ce contrôle, la minimisation se déferait au
   premier ajout de paquet distrait ;
+- le service qui donne son DNS à un poste **démarré par le réseau** est présent,
+  activé, et toujours conditionné à `/run/net-*.conf` ;
 - **les sorties de secours existent** : `getty@tty2` et `getty@tty3` activées,
   autologin root dans leur réglage, et le rappel `Ctrl+Alt+F2` présent dans le
   front. Une console de secours qui demanderait un mot de passe serait

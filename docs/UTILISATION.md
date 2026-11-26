@@ -198,6 +198,7 @@ veut relire chaque étape plutôt qu'enchaîner les postes.
 | L'écran reste noir après le choix de la clé | Matériel très ancien : essayez le mode BIOS hérité (CSM) dans le firmware |
 | `AUCUNE adresse IP` | Câble Ethernet débranché, ou pas de DHCP. Pour le Wi-Fi : `nmcli dev wifi connect <SSID> password <mot_de_passe>` depuis un shell. **Tant qu'il n'y a pas de réseau, killbit refuse d'effacer** |
 | `Impossible de contacter le serveur` | killbit joint son serveur avant d'écrire. Rien n'a été effacé : rétablissez le réseau et recommencez le poste |
+| `Impossible de contacter le serveur` **sur un poste démarré par le réseau (PXE)** | Le poste a bien une adresse mais ne résout aucun nom. L'image le corrige d'elle-même depuis l'arrivée du service `killbit-dns-netboot` (26 novembre 2026). Sur une image plus ancienne : `Ctrl+Alt+F2`, puis `resolvectl dns <carte> <ip_du_serveur_dns>` (la carte et le DNS sont dans `/run/net-*.conf`), et reprendre le poste |
 | Un disque n'apparaît pas dans la liste | Contrôleur en mode RAID dans le firmware : basculez-le en AHCI |
 | killbit refuse d'effacer un disque | Lisez le message : un disque gelé par le firmware (`frozen`) demande un cycle de veille/réveil |
 | killbit rapporte un Wi-Fi non opérationnel | Si le poste est un portable dont le Wi-Fi fonctionne, signalez-le : les micrologiciels Wi-Fi sont embarqués depuis la version `v0.2.0`, et un rapport faux sur ce point est un défaut de l'image |
