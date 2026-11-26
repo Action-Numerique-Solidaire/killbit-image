@@ -152,8 +152,13 @@ jobs:
           fail=0
 
           echo "--- doit etre present ---"
+          # usr/bin/ping et usr/bin/nslookup : les deux commandes par
+          # lesquelles un opérateur tranche « le réseau ou le DNS ? » depuis le
+          # poste. busybox porte les applets mais aucun lien vers elles : si ces
+          # fichiers disparaissent, c'est que les paquets ont été retirés.
           for f in usr/local/bin/killbit usr/sbin/hdparm usr/sbin/nvme \
                    usr/sbin/smartctl usr/local/sbin/killbit-session.sh \
+                   usr/bin/ping usr/bin/nslookup \
                    root/.bash_profile root/.bashrc root/.bash_history \
                    etc/killbit-image-release etc/default/keyboard; do
             if sudo test -e "/mnt/sq/$f"; then echo "  OK       $f"

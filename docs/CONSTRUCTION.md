@@ -260,6 +260,12 @@ La chaîne, dans l'ordre :
    `127.0.0.53` : la libc interroge donc un résolveur qui n'a personne à qui
    demander.
 
+Ce diagnostic a demandé un labo parce que le poste n'avait pas de quoi le
+poser lui-même : ni `ping` ni `nslookup` n'étaient dans l'image. Les deux y sont
+depuis la `v0.3.1` (`iputils-ping` et `bind9-dnsutils`, 8,3 Mo installés) :
+`ping` sur une adresse IP sépare la panne réseau de la panne de résolution, et
+`nslookup` dit quel serveur a répondu, ou qu'aucun n'a été interrogé.
+
 Rien de tout cela n'est un défaut de l'image prise séparément : chaque maillon
 fait ce qu'il doit. `killbit-dns-netboot.service` relit `/run/net-*.conf` et
 transmet le DNS à `resolved` (`resolvectl dns`, `default-route`, `domain`).

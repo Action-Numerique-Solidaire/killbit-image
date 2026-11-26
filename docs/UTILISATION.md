@@ -197,8 +197,8 @@ veut relire chaque étape plutôt qu'enchaîner les postes.
 | La clé n'apparaît pas au menu de démarrage | Secure Boot actif, ou clé écrite sur une partition au lieu du disque entier |
 | L'écran reste noir après le choix de la clé | Matériel très ancien : essayez le mode BIOS hérité (CSM) dans le firmware |
 | `AUCUNE adresse IP` | Câble Ethernet débranché, ou pas de DHCP. Pour le Wi-Fi : `nmcli dev wifi connect <SSID> password <mot_de_passe>` depuis un shell. **Tant qu'il n'y a pas de réseau, killbit refuse d'effacer** |
-| `Impossible de contacter le serveur` | killbit joint son serveur avant d'écrire. Rien n'a été effacé : rétablissez le réseau et recommencez le poste |
-| `Impossible de contacter le serveur` **sur un poste démarré par le réseau (PXE)** | Le poste a bien une adresse mais ne résout aucun nom. L'image le corrige d'elle-même depuis l'arrivée du service `killbit-dns-netboot` (26 novembre 2026). Sur une image plus ancienne : `Ctrl+Alt+F2`, puis `resolvectl dns <carte> <ip_du_serveur_dns>` (la carte et le DNS sont dans `/run/net-*.conf`), et reprendre le poste |
+| `Impossible de contacter le serveur` | killbit joint son serveur avant d'écrire. Rien n'a été effacé : rétablissez le réseau et recommencez le poste. Pour savoir où ça coince, depuis `Ctrl+Alt+F2` : `ping 1.1.1.1` répond ⇒ le réseau est là, et c'est le DNS ; `nslookup actionnumeriquesolidaire.org` répond ⇒ le DNS est là, et c'est la sortie HTTPS |
+| `Impossible de contacter le serveur` **sur un poste démarré par le réseau (PXE)** | Le poste a bien une adresse mais ne résout aucun nom. L'image le corrige d'elle-même depuis la `v0.3.1` (service `killbit-dns-netboot`). Sur une image plus ancienne : `Ctrl+Alt+F2`, puis `resolvectl dns <carte> <ip_du_serveur_dns>` (la carte et le DNS sont dans `/run/net-*.conf`), et reprendre le poste |
 | Un disque n'apparaît pas dans la liste | Contrôleur en mode RAID dans le firmware : basculez-le en AHCI |
 | killbit refuse d'effacer un disque | Lisez le message : un disque gelé par le firmware (`frozen`) demande un cycle de veille/réveil |
 | killbit rapporte un Wi-Fi non opérationnel | Si le poste est un portable dont le Wi-Fi fonctionne, signalez-le : les micrologiciels Wi-Fi sont embarqués depuis la version `v0.2.0`, et un rapport faux sur ce point est un défaut de l'image |
@@ -206,8 +206,9 @@ veut relire chaque étape plutôt qu'enchaîner les postes.
 
 Pour un diagnostic plus poussé, `Ctrl+Alt+F2` et `Ctrl+Alt+F3` donnent deux
 consoles déjà connectées en root, et tous les outils habituels sont présents :
-`lsblk`, `smartctl`, `hdparm`, `nvme`, `dmidecode`, `lshw`. La commande `aide`
-réaffiche l'écran d'aide, `guide` ramène au front.
+`lsblk`, `smartctl`, `hdparm`, `nvme`, `dmidecode`, `lshw`, et pour le réseau
+`ip`, `nmcli`, et — depuis la `v0.3.1` — `ping`, `nslookup`, `dig` et `host`.
+La commande `aide` réaffiche l'écran d'aide, `guide` ramène au front.
 
 > Les consoles `F4` à `F6` existent aussi, mais elles demandent une connexion
 > que personne ne peut franchir : le compte root de l'image n'a pas de mot de

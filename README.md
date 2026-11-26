@@ -170,8 +170,14 @@ Les prérequis sont déduits du binaire lui-même, pas devinés :
 
 S'y ajoutent l'identification matérielle (`dmidecode`, `pciutils`, `usbutils`,
 `lshw`), le strict nécessaire du système live (`linux-image-amd64`,
-`systemd-sysv`, `live-boot`, `live-config`) et le confort en console (`less`,
-`nano`, `kbd`, `console-setup`).
+`systemd-sysv`, `live-boot`, `live-config`), le confort en console (`less`,
+`nano`, `kbd`, `console-setup`) et deux commandes de diagnostic réseau,
+`ping` (`iputils-ping`) et `nslookup` (`bind9-dnsutils`, qui apporte aussi `dig`
+et `host`). Ces deux-là tranchent la question posée par « Impossible de
+contacter le serveur » : le réseau répond-il, et le nom se résout-il ? busybox
+embarque bien les applets, mais le paquet Debian ne pose aucun lien vers elles :
+aucune des deux n'était dans le `PATH`. Coût mesuré : 13 paquets, 8,3 Mo
+installés, 2,8 Mo de `.deb`.
 
 ### Les dépendances que killbit réclame lui-même
 
@@ -233,13 +239,17 @@ Les paquets sont installés **sans recommandations**.
 
 ## Résultat mesuré
 
-| | Image d'origine | Après minimisation | + Wi-Fi | + chaîne de compilation (`v0.2.0`) | **Aujourd'hui (`v0.3.0`)** |
-|---|---|---|---|---|---|
-| ISO publiée | 522 Mo | 233 Mo | 338 Mo | 426 Mo | **320 Mo** |
-| Système embarqué sur disque | — | 450 Mo | 690 Mo | 1 129 Mo | 690 Mo |
-| Paquets installés dans l'image | — | 209 | 221 | 310 | 225 |
-| Construction à froid | — | 184 s | 225 s | — | 212 s |
-| Amorçage jusqu'au marqueur | — | ~6 s | ~5,5 s | — | ~5,5 s de temps noyau |
+| | Image d'origine | Après minimisation | + Wi-Fi | + chaîne de compilation (`v0.2.0`) | `v0.3.0` | **Aujourd'hui (`v0.3.1`)** |
+|---|---|---|---|---|---|---|
+| ISO publiée | 522 Mo | 233 Mo | 338 Mo | 426 Mo | 320 Mo | **323 Mo** |
+| Système embarqué sur disque | — | 450 Mo | 690 Mo | 1 129 Mo | 690 Mo | 698 Mo |
+| Paquets installés dans l'image | — | 209 | 221 | 310 | 225 | 238 |
+| Construction à froid | — | 184 s | 225 s | — | 212 s | — |
+| Amorçage jusqu'au marqueur | — | ~6 s | ~5,5 s | — | ~5,5 s de temps noyau | ~5,5 s |
+
+Les 3 Mio d'écart entre les deux dernières colonnes sont `ping` et `nslookup`
+(13 paquets, 8,3 Mo installés) : le prix de pouvoir poser un diagnostic réseau
+depuis le poste lui-même.
 
 Les 106 Mo repris entre les deux dernières colonnes viennent de deux endroits,
 chacun mesuré sur le même chroot :
@@ -351,7 +361,8 @@ workflow vérifie que :
 - le `.sha256` publié est au nom nu et se vérifie réellement ;
 - le squashfs contient `killbit`, ses outils, les trois bibliothèques attendues,
   le front de l'opérateur, **l'historique pré-rempli avec la commande
-  d'effacement**, et de quoi faire aboutir le test Wi-Fi de killbit ;
+  d'effacement**, `ping` et `nslookup` pour le diagnostic réseau, et de quoi
+  faire aboutir le test Wi-Fi de killbit ;
 - les composants retirés sont bien **absents** — X, openbox, xterm, firefox et
   les outils de fabrication. Sans ce contrôle, la minimisation se déferait au
   premier ajout de paquet distrait ;

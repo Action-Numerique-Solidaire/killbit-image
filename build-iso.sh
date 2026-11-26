@@ -98,6 +98,21 @@ PACKAGES=(
   dmidecode pciutils usbutils lshw
   # réseau
   ca-certificates curl iproute2 systemd-resolved
+  # diagnostic réseau à la main. Quand le front affiche « Impossible de
+  # contacter le serveur », deux questions se posent dans cet ordre : le réseau
+  # répond-il, et le nom se résout-il ? Sans ces deux commandes il n'y avait rien
+  # pour les poser depuis le poste — busybox embarque bien les applets ping et
+  # nslookup, mais le paquet Debian ne pose aucun lien vers elles, donc aucune
+  # des deux n'est dans le PATH. Les vrais binaires valent mieux à l'atelier :
+  # les messages sont ceux de la documentation, et bind9-dnsutils ajoute dig et
+  # host au passage. Coût mesuré dans ce chroot : 13 paquets, 8,3 Mo installés,
+  # 2,8 Mo de .deb, libxml2 et bind9-libs en représentant les deux tiers, et
+  # 3 Mio d'ISO.
+  #
+  # À noter : Debian ne pose aucune capacité sur /usr/bin/ping (ni setuid ni
+  # cap_net_raw), il s'appuie sur net.ipv4.ping_group_range. Sans conséquence
+  # ici, où les consoles sont connectées en root — vérifié, « ping -c1 » répond.
+  iputils-ping bind9-dnsutils
   # système live
   # systemd-sysv est INDISPENSABLE : il fournit /sbin/init. Avec --variant=minbase
   # et --no-install-recommends il n'est pas tiré, et le noyau panique au
